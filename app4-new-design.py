@@ -24,8 +24,8 @@ import re  # ใช้ parse ค่าตัวเลขจากคำตอบ
 
 # ---------------- Paths ----------------
 # LOG_DIR = "logs"
-# LOG_DIR = r"C:\Users\LiDAR\OneDrive - NARIT (1)\LiDAR\LiDAR-data\Laser-logs"
-LOG_DIR = r"logs/data"
+LOG_DIR = r"C:\Users\LiDAR\OneDrive - NARIT (1)\LiDAR\LiDAR-data\Laser-logs"
+# LOG_DIR = r"logs/data"
 SETTINGS_DIR = "setting"
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SETTINGS_DIR, exist_ok=True)
@@ -337,11 +337,11 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         # --- Sliding roof API base ---192.168.3.209:8000/api/gpio/23
-        self.roof_api_base = "http://192.168.3.150:8000/door"
-        self.limit_api_url = "http://192.168.3.150:8000/limit/status"
+        # self.roof_api_base = "http://192.168.3.150:8000/door"
+        # self.limit_api_url = "http://192.168.3.150:8000/limit/status"
         self.log_dir = LOG_DIR
-        # self.roof_api_base = "http://192.168.49.8:8000/door/"
-        # self.limit_api_url = "http://192.168.49.8:8000/limit/status"
+        self.roof_api_base = "http://192.168.49.8:8000/door/"
+        self.limit_api_url = "http://192.168.49.8:8000/limit/status"
         self._roof_polling = False
         self._limit_poll_inflight = False
         self._roof_state_cached = "N/A"
