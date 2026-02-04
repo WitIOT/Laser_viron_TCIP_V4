@@ -1,0 +1,24 @@
+{
+  "ip": "127.0.0.1",
+  "port": 2323,
+  "user": "VR70AB07",
+  "qsdelay": "220",
+  "freq": "20",
+  "roof_api_base": "http://192.168.3.150:8000/door",
+  "limit_api_url": "http://192.168.3.150:8000/limit/status",
+  "log_dir": "D:/work-lidar/laser-gen3/v3/logs",
+  "safety_fire_enabled": true,
+  "prefire_open_sec": 15.0,
+  "postrest_close_sec": 5.0,
+  "programs": [
+    {
+      "name": "Program 1",
+      "enabled": true,
+      "mode": "everyday",
+      "start": "16:30",
+      "end": "16:50",
+      "fire_ms": 60000,
+      "rest_ms": 60000
+    }
+  ]
+}
