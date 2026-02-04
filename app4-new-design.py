@@ -454,19 +454,10 @@ class App(tk.Tk):
         # Connection
         conn = ttk.LabelFrame(root, text="Connection")
         conn.grid(row=0, column=0, columnspan=2, sticky="nwe", padx=5, pady=5)
-        ttk.Label(conn, text="IP").grid(row=0, column=0)
-        self.ip_var = tk.StringVar(value="127.0.0.1")
-        ttk.Entry(conn, textvariable=self.ip_var, width=16).grid(row=0, column=1, padx=5)
-        ttk.Label(conn, text="Port").grid(row=0, column=2)
-        self.port_var = tk.IntVar(value=2323)
-        ttk.Entry(conn, textvariable=self.port_var, width=8).grid(row=0, column=3, padx=5)
-        ttk.Label(conn, text="User").grid(row=0, column=4)
-        self.user_var = tk.StringVar(value="VR70AB07")
-        ttk.Entry(conn, textvariable=self.user_var, width=14).grid(row=0, column=5, padx=5)
-        ttk.Button(conn, text="Connect", command=self.connect).grid(row=0, column=6, padx=5)
-        ttk.Button(conn, text="Disconnect", command=self.disconnect).grid(row=0, column=7, padx=5)
+        ttk.Button(conn, text="Connect", command=self.connect).grid(row=0, column=0, padx=5)
+        ttk.Button(conn, text="Disconnect", command=self.disconnect).grid(row=0, column=1, padx=5)
         self.conn_status = ttk.Label(conn, text="Disconnected", foreground="red")
-        self.conn_status.grid(row=0, column=8, padx=10)
+        self.conn_status.grid(row=0, column=2, padx=10)
 
         # Manual controls
         man = ttk.LabelFrame(root, text="Manual Control")
@@ -614,8 +605,25 @@ class App(tk.Tk):
         """Tab 2: กำหนด roof_api_base, limit_api_url และ logs directory"""
         parent.columnconfigure(0, weight=1)
 
+        conn_cfg = ttk.LabelFrame(parent, text="Connection Settings")
+        conn_cfg.grid(row=0, column=0, sticky="nwe", padx=10, pady=10)
+        conn_cfg.columnconfigure(1, weight=1)
+
+        self.ip_var = tk.StringVar(value="127.0.0.1")
+        self.port_var = tk.IntVar(value=2323)
+        self.user_var = tk.StringVar(value="VR70AB07")
+
+        ttk.Label(conn_cfg, text="IP").grid(row=0, column=0, sticky="w", padx=6, pady=6)
+        ttk.Entry(conn_cfg, textvariable=self.ip_var, width=20).grid(row=0, column=1, sticky="w", padx=6, pady=6)
+
+        ttk.Label(conn_cfg, text="Port").grid(row=0, column=2, sticky="w", padx=6, pady=6)
+        ttk.Entry(conn_cfg, textvariable=self.port_var, width=10).grid(row=0, column=3, sticky="w", padx=6, pady=6)
+
+        ttk.Label(conn_cfg, text="User").grid(row=0, column=4, sticky="w", padx=6, pady=6)
+        ttk.Entry(conn_cfg, textvariable=self.user_var, width=16).grid(row=0, column=5, sticky="w", padx=6, pady=6)
+
         lf = ttk.LabelFrame(parent, text="API / Logs Settings")
-        lf.grid(row=0, column=0, sticky="nwe", padx=10, pady=10)
+        lf.grid(row=1, column=0, sticky="nwe", padx=10, pady=10)
         lf.columnconfigure(1, weight=1)
 
         self.roof_api_base_var = tk.StringVar(value=str(getattr(self, "roof_api_base", "")))
@@ -662,7 +670,7 @@ class App(tk.Tk):
         ttk.Button(lf, text="Browse", command=browse_dir).grid(row=2, column=2, padx=6, pady=6)
 
         roof_lf = ttk.LabelFrame(parent, text="Auto Roof Timing")
-        roof_lf.grid(row=1, column=0, sticky="nwe", padx=10, pady=(0, 10))
+        roof_lf.grid(row=2, column=0, sticky="nwe", padx=10, pady=(0, 10))
         roof_lf.columnconfigure(1, weight=1)
 
         self.prefire_open_sec_var = tk.DoubleVar(value=float(getattr(self, "roof_preopen_sec", 15)))
@@ -678,7 +686,7 @@ class App(tk.Tk):
             .grid(row=2, column=0, columnspan=2, sticky="w", padx=6, pady=(0,6))
 
         btns = ttk.Frame(parent)
-        btns.grid(row=2, column=0, sticky="e", padx=10, pady=(0,10))
+        btns.grid(row=3, column=0, sticky="e", padx=10, pady=(0,10))
         ttk.Button(btns, text="Apply & Save", command=self._apply_and_save_config).pack(side=tk.RIGHT, padx=4)
 
         # note = ttk.Label(
@@ -690,7 +698,7 @@ class App(tk.Tk):
         #     foreground="gray",
         #     justify="left",
         # )
-        # note.grid(row=3, column=0, sticky="w", padx=12, pady=(0,10))
+        # note.grid(row=4, column=0, sticky="w", padx=12, pady=(0,10))
 
     def _apply_config_tab(self):
         """Apply ค่าในแท็บ API / Logs ไปใช้จริงระหว่างรัน"""
