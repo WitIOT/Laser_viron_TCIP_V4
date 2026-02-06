@@ -4,10 +4,17 @@
   "user": "VR70AB07",
   "qsdelay": "220",
   "freq": "20",
+<<<<<<< HEAD
   "roof_api_base": "http://192.168.49.8:8000/door",
   "limit_api_url": "http://192.168.49.8:8000/limit/status",
   "log_dir": "C:/Users/LiDAR/OneDrive - NARIT (1)/LiDAR/LiDAR-data/Laser-logs",
   "safety_fire_enabled": true,
+=======
+  "roof_api_base": "http://192.168.3.150:8000/door",
+  "limit_api_url": "http://192.168.3.150:8000/limit/status",
+  "log_dir": "D:/work-lidar/laser-gen3/v3/logs",
+  "safety_fire_enabled": false,
+>>>>>>> c90c4896de25db29e2ceaef9aee4fa733b820550
   "prefire_open_sec": 15.0,
   "postrest_close_sec": 5.0,
   "programs": [

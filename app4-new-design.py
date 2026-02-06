@@ -12,6 +12,7 @@ except Exception:
     TZ = timezone(timedelta(hours=7))
 
 from api_clients import SlidingRoofClient, LimitStatusClient, RoofResult
+from tutorial_overlay import TutorialOverlay
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 
@@ -24,8 +25,8 @@ import re  # ใช้ parse ค่าตัวเลขจากคำตอบ
 
 # ---------------- Paths ----------------
 # LOG_DIR = "logs"
-LOG_DIR = r"C:\Users\LiDAR\OneDrive - NARIT (1)\LiDAR\LiDAR-data\Laser-logs"
-# LOG_DIR = r"logs/data"
+# LOG_DIR = r"C:\Users\LiDAR\OneDrive - NARIT (1)\LiDAR\LiDAR-data\Laser-logs"
+LOG_DIR = r"logs/data"
 SETTINGS_DIR = "setting"
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SETTINGS_DIR, exist_ok=True)
@@ -251,9 +252,9 @@ class CalendarDialog(tk.Toplevel):
         self.grid_frame = ttk.Frame(self); self.grid_frame.pack(padx=8, pady=6)
 
         frm_bot = ttk.Frame(self); frm_bot.pack(padx=8, pady=8, fill=tk.X)
-        ttk.Button(frm_bot, text="วันนี้", command=self.go_today).pack(side=tk.LEFT)
-        ttk.Button(frm_bot, text="ยกเลิก", command=self.cancel).pack(side=tk.RIGHT)
-        ttk.Button(frm_bot, text="ตกลง", command=self.ok).pack(side=tk.RIGHT, padx=6)
+        ttk.Button(frm_bot, text="Today", command=self.go_today).pack(side=tk.LEFT)
+        ttk.Button(frm_bot, text="Cancel", command=self.cancel).pack(side=tk.RIGHT)
+        ttk.Button(frm_bot, text="OK", command=self.ok).pack(side=tk.RIGHT, padx=6)
 
         self.buttons = []  # เก็บปุ่มวัน
         self.draw_month()
@@ -337,11 +338,11 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         # --- Sliding roof API base ---192.168.3.209:8000/api/gpio/23
-        # self.roof_api_base = "http://192.168.3.150:8000/door"
-        # self.limit_api_url = "http://192.168.3.150:8000/limit/status"
+        self.roof_api_base = "http://192.168.3.150:8000/door"
+        self.limit_api_url = "http://192.168.3.150:8000/limit/status"
         self.log_dir = LOG_DIR
-        self.roof_api_base = "http://192.168.49.8:8000/door/"
-        self.limit_api_url = "http://192.168.49.8:8000/limit/status"
+        # self.roof_api_base = "http://192.168.49.8:8000/door/"
+        # self.limit_api_url = "http://192.168.49.8:8000/limit/status"
         self._roof_polling = False
         self._limit_poll_inflight = False
         self._roof_state_cached = "N/A"
@@ -410,6 +411,9 @@ class App(tk.Tk):
         self.roof_preopen_sec = 15  # เปิดก่อน FIRE กี่วินาที
         self.roof_postclose_sec = 3  # ปิดหลัง REST กี่วินาที
 
+        self._ui_refs = {}
+        self._tutorial = None
+
         self._patch_messagebox_with_timestamp()
 
         # Build UI
@@ -448,25 +452,42 @@ class App(tk.Tk):
         tab_cfg  = ttk.Frame(nb)
         nb.add(tab_main, text="Main")
         nb.add(tab_cfg,  text="Settings / Config")
+        self._nb = nb
+        self._tab_main = tab_main
+        self._tab_cfg = tab_cfg
 
         root = ttk.Frame(tab_main); root.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Connection
         conn = ttk.LabelFrame(root, text="Connection")
         conn.grid(row=0, column=0, columnspan=2, sticky="nwe", padx=5, pady=5)
-        ttk.Button(conn, text="Connect", command=self.connect).grid(row=0, column=0, padx=5)
-        ttk.Button(conn, text="Disconnect", command=self.disconnect).grid(row=0, column=1, padx=5)
+        btn_connect = ttk.Button(conn, text="Connect", command=self.connect)
+        btn_connect.grid(row=0, column=0, padx=5)
+        btn_disconnect = ttk.Button(conn, text="Disconnect", command=self.disconnect)
+        btn_disconnect.grid(row=0, column=1, padx=5)
+        btn_tutorial = ttk.Button(conn, text="Tutorial", command=self._start_tutorial)
+        btn_tutorial.grid(row=0, column=2, padx=5)
         self.conn_status = ttk.Label(conn, text="Disconnected", foreground="red")
-        self.conn_status.grid(row=0, column=2, padx=10)
+        self.conn_status.grid(row=0, column=3, padx=10)
+
+        self._ui_refs["connect_btn"] = btn_connect
+        self._ui_refs["disconnect_btn"] = btn_disconnect
 
         # Manual controls
         man = ttk.LabelFrame(root, text="Manual Control")
         man.grid(row=1, column=0, sticky="nwe", padx=5, pady=5)
-        ttk.Button(man, text="FIRE", command=self.cmd_fire, width=10).grid(row=0, column=0, padx=5, pady=2)
+        btn_fire = ttk.Button(man, text="FIRE", command=self.cmd_fire, width=10)
+        btn_fire.grid(row=0, column=0, padx=5, pady=2)
         
-        ttk.Button(man, text="STANDBY", command=self.cmd_standby, width=10).grid(row=0, column=1, padx=5, pady=2)
+        btn_standby = ttk.Button(man, text="STANDBY", command=self.cmd_standby, width=10)
+        btn_standby.grid(row=0, column=1, padx=5, pady=2)
         # ttk.Button(man, text="TEMP?", command=self.cmd_temp, width=10).grid(row=0, column=2, padx=5, pady=2)
-        ttk.Button(man, text="STOP", command=self.cmd_stop, width=10).grid(row=0, column=3, padx=5, pady=2)
+        btn_stop = ttk.Button(man, text="STOP", command=self.cmd_stop, width=10)
+        btn_stop.grid(row=0, column=3, padx=5, pady=2)
+        self._ui_refs["manual_frame"] = man
+        self._ui_refs["fire_btn"] = btn_fire
+        self._ui_refs["standby_btn"] = btn_standby
+        self._ui_refs["stop_btn"] = btn_stop
 
         self.laser_status_var = tk.StringVar(value="Laser: -")
         ttk.Label(conn, textvariable=self.laser_status_var, foreground="blue").grid(
@@ -488,16 +509,18 @@ class App(tk.Tk):
         self.csv_name_var = tk.StringVar(value=self._default_csv_name())
         ttk.Entry(tele, textvariable=self.csv_name_var, width=44)\
             .grid(row=1, column=2, columnspan=2, sticky="we", padx=5)
+        self._ui_refs["tele_frame"] = tele
 
         # Setting
         setting = ttk.LabelFrame(root, text="Setting")
         setting.grid(row=2, column=0, sticky="nwe", padx=5, pady=5)
+        self._ui_refs["setting_frame"] = setting
         f_qs = ttk.Frame(setting); f_qs.pack(fill=tk.X, pady=2)
         ttk.Label(f_qs, text="QSDELAY (µs):").pack(side=tk.LEFT, padx=5)
         self.qsdelay_var = tk.StringVar(value="220")
         qs_entry = ttk.Entry(f_qs, textvariable=self.qsdelay_var, width=10); qs_entry.pack(side=tk.LEFT)
-        ttk.Button(f_qs, text="Set", command=self.apply_qsdelay).pack(side=tk.LEFT, padx=4)
-        ttk.Button(f_qs, text="QSDELAY?", command=self.cmd_qsdelay_query).pack(side=tk.LEFT, padx=2)
+        btn_qs_set = ttk.Button(f_qs, text="Set", command=self.apply_qsdelay); btn_qs_set.pack(side=tk.LEFT, padx=4)
+        btn_qs_query = ttk.Button(f_qs, text="QSDELAY?", command=self.cmd_qsdelay_query); btn_qs_query.pack(side=tk.LEFT, padx=2)
         ttk.Label(f_qs, text="recommend: 0 – 400", foreground="gray").pack(side=tk.LEFT, padx=8)
         qs_entry.bind("<Return>", lambda _: self.apply_qsdelay())
 
@@ -505,8 +528,8 @@ class App(tk.Tk):
         ttk.Label(f_df, text="Frequency (Hz):").pack(side=tk.LEFT, padx=5)
         self.freq_var = tk.StringVar(value="20")
         fr_entry = ttk.Entry(f_df, textvariable=self.freq_var, width=10); fr_entry.pack(side=tk.LEFT)
-        ttk.Button(f_df, text="Set", command=self.apply_dfreq).pack(side=tk.LEFT, padx=4)
-        ttk.Button(f_df, text="DFREQ?", command=self.cmd_dfreq_query).pack(side=tk.LEFT, padx=2)
+        btn_df_set = ttk.Button(f_df, text="Set", command=self.apply_dfreq); btn_df_set.pack(side=tk.LEFT, padx=4)
+        btn_df_query = ttk.Button(f_df, text="DFREQ?", command=self.cmd_dfreq_query); btn_df_query.pack(side=tk.LEFT, padx=2)
         ttk.Label(f_df, text="recommend: 1 – 22", foreground="gray").pack(side=tk.LEFT, padx=8)
         fr_entry.bind("<Return>", lambda _: self.apply_dfreq())
 
@@ -514,14 +537,17 @@ class App(tk.Tk):
         # ===== Temp Control (วางใน Setting) =====
         tempf = ttk.LabelFrame(setting, text="Temp Control")
         tempf.pack(fill=tk.X, padx=4, pady=4)
+        self._ui_refs["temp_frame"] = tempf
 
-        ttk.Checkbutton(tempf, text="Enable", variable=self.temp_ctl_enabled)\
-            .grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        temp_enable = ttk.Checkbutton(tempf, text="Enable", variable=self.temp_ctl_enabled)
+        temp_enable.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
         ttk.Label(tempf, text="Max Temp (°C):")\
             .grid(row=0, column=1, padx=5, pady=5, sticky="e")
-        ttk.Entry(tempf, textvariable=self.max_temp_var, width=8)\
-            .grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        temp_max = ttk.Entry(tempf, textvariable=self.max_temp_var, width=8)
+        temp_max.grid(row=0, column=2, padx=5, pady=5, sticky="w")
+        self._ui_refs["temp_enable"] = temp_enable
+        self._ui_refs["temp_max"] = temp_max
 
         # ttk.Label(tempf, text="เมื่อ LTEMF > Max จะสั่ง StandBy อัตโนมัติ")\
         #     .grid(row=1, column=0, columnspan=3, padx=5, pady=(0,5), sticky="w")
@@ -529,14 +555,17 @@ class App(tk.Tk):
         # ---- Control Sliding Roof (under Setting) ----
         roof_group = ttk.LabelFrame(setting, text="Control Sliding Roof")
         roof_group.pack(fill=tk.X, padx=4, pady=4)
+        self._ui_refs["roof_frame"] = roof_group
         # roof_group.grid(row=3, column=0, sticky="nwe", padx=4, pady=4)
 
         frm_roof = ttk.Frame(roof_group); frm_roof.pack(fill=tk.X, padx=6, pady=6)
 
-        ttk.Button(frm_roof, text="Open", width=16,
-                   command=self.roof_open).pack(side=tk.LEFT, padx=3)
-        ttk.Button(frm_roof, text="Close", width=16,
-                   command=self.roof_close).pack(side=tk.LEFT, padx=3)
+        btn_roof_open = ttk.Button(frm_roof, text="Open", width=16,
+                   command=self.roof_open)
+        btn_roof_open.pack(side=tk.LEFT, padx=3)
+        btn_roof_close = ttk.Button(frm_roof, text="Close", width=16,
+                   command=self.roof_close)
+        btn_roof_close.pack(side=tk.LEFT, padx=3)
         # ttk.Button(frm_roof, text="Refresh status", width=18,
         #            command=self.roof_refresh).pack(side=tk.LEFT, padx=3)
 
@@ -549,6 +578,9 @@ class App(tk.Tk):
 
         self.roof_status_lbl = ttk.Label(frm_roof, textvariable=self.roof_status_var)
         self.roof_status_lbl.pack(side=tk.LEFT, padx=2)
+        self._ui_refs["roof_open_btn"] = btn_roof_open
+        self._ui_refs["roof_close_btn"] = btn_roof_close
+        self._ui_refs["roof_status_lbl"] = self.roof_status_lbl
 
         self.roof_auto_sched_cb = ttk.Checkbutton(
             frm_roof,
@@ -557,6 +589,7 @@ class App(tk.Tk):
         )
         self.roof_auto_sched_cb.pack(side=tk.RIGHT, padx=6)
         self._update_roof_auto_label()
+        self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
 
         # self.roof_auto_var = tk.BooleanVar(value=True)
         # ttk.Checkbutton(frm_roof, text="Auto-refresh (5s)",
@@ -566,13 +599,22 @@ class App(tk.Tk):
         # Programs group
         prog_box = ttk.LabelFrame(root, text="Scheduled Programs")
         prog_box.grid(row=2, column=1, sticky="nwe", padx=5, pady=5)
+        self._ui_refs["programs_frame"] = prog_box
 
         toolbar = ttk.Frame(prog_box); toolbar.pack(fill=tk.X, pady=3)
-        ttk.Button(toolbar, text="+ Add Program", command=self.add_program).pack(side=tk.LEFT, padx=4)
-        ttk.Button(toolbar, text="Start All", command=self.start_all).pack(side=tk.LEFT, padx=4)
-        ttk.Button(toolbar, text="Stop All", command=self.stop_all_programs).pack(side=tk.LEFT, padx=4)
+        btn_add_prog = ttk.Button(toolbar, text="+ Add Program", command=self.add_program)
+        btn_add_prog.pack(side=tk.LEFT, padx=4)
+        btn_start_all = ttk.Button(toolbar, text="Start All", command=self.start_all)
+        btn_start_all.pack(side=tk.LEFT, padx=4)
+        btn_stop_all = ttk.Button(toolbar, text="Stop All", command=self.stop_all_programs)
+        btn_stop_all.pack(side=tk.LEFT, padx=4)
 
-        ttk.Button(toolbar, text="Remove All", command=self.remove_all_programs).pack(side=tk.LEFT, padx=4)
+        btn_remove_all = ttk.Button(toolbar, text="Remove All", command=self.remove_all_programs)
+        btn_remove_all.pack(side=tk.LEFT, padx=4)
+        self._ui_refs["add_program_btn"] = btn_add_prog
+        self._ui_refs["start_all_btn"] = btn_start_all
+        self._ui_refs["stop_all_btn"] = btn_stop_all
+        self._ui_refs["remove_all_btn"] = btn_remove_all
 
         # 👇 นาฬิกามุมขวา
         self.clock_var = tk.StringVar(value="Time: -")
@@ -585,6 +627,8 @@ class App(tk.Tk):
         self.plot_frame = ttk.LabelFrame(vis, text="Realtime Charts")
         logs_container = ttk.LabelFrame(vis, text="Logs")
         vis.add(self.plot_frame, weight=3); vis.add(logs_container, weight=2)
+        self._ui_refs["charts_frame"] = self.plot_frame
+        self._ui_refs["logs_frame"] = logs_container
         nb = ttk.Notebook(logs_container); nb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         tab_all = ttk.Frame(nb); nb.add(tab_all, text="All except Schedule")
@@ -605,7 +649,7 @@ class App(tk.Tk):
         """Tab 2: กำหนด roof_api_base, limit_api_url และ logs directory"""
         parent.columnconfigure(0, weight=1)
 
-        conn_cfg = ttk.LabelFrame(parent, text="Connection Settings")
+        conn_cfg = ttk.LabelFrame(parent, text="Laser Connection Settings")
         conn_cfg.grid(row=0, column=0, sticky="nwe", padx=10, pady=10)
         conn_cfg.columnconfigure(1, weight=1)
 
@@ -614,13 +658,20 @@ class App(tk.Tk):
         self.user_var = tk.StringVar(value="VR70AB07")
 
         ttk.Label(conn_cfg, text="IP").grid(row=0, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(conn_cfg, textvariable=self.ip_var, width=20).grid(row=0, column=1, sticky="w", padx=6, pady=6)
+        ip_entry = ttk.Entry(conn_cfg, textvariable=self.ip_var, width=20)
+        ip_entry.grid(row=0, column=1, sticky="w", padx=6, pady=6)
 
-        ttk.Label(conn_cfg, text="Port").grid(row=0, column=2, sticky="w", padx=6, pady=6)
-        ttk.Entry(conn_cfg, textvariable=self.port_var, width=10).grid(row=0, column=3, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text="Port").grid(row=1, column=0, sticky="w", padx=6, pady=6)
+        port_entry = ttk.Entry(conn_cfg, textvariable=self.port_var, width=10)
+        port_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
 
-        ttk.Label(conn_cfg, text="User").grid(row=0, column=4, sticky="w", padx=6, pady=6)
-        ttk.Entry(conn_cfg, textvariable=self.user_var, width=16).grid(row=0, column=5, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text="User").grid(row=2, column=0, sticky="w", padx=6, pady=6)
+        user_entry = ttk.Entry(conn_cfg, textvariable=self.user_var, width=16)
+        user_entry.grid(row=2, column=1, sticky="w", padx=6, pady=6)
+
+        self._ui_refs["ip_entry"] = ip_entry
+        self._ui_refs["port_entry"] = port_entry
+        self._ui_refs["user_entry"] = user_entry
 
         lf = ttk.LabelFrame(parent, text="API / Logs Settings")
         lf.grid(row=1, column=0, sticky="nwe", padx=10, pady=10)
@@ -700,6 +751,7 @@ class App(tk.Tk):
         # )
         # note.grid(row=4, column=0, sticky="w", padx=12, pady=(0,10))
 
+
     def _apply_config_tab(self):
         """Apply ค่าในแท็บ API / Logs ไปใช้จริงระหว่างรัน"""
         try:
@@ -760,6 +812,102 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    def _start_tutorial(self):
+        steps = [
+            {
+                "title": "Connection Info",
+                "body": "Open Settings / Config and enter IP, Port, and User.",
+                "widget": "ip_entry",
+                "on_show": lambda: self._nb.select(self._tab_cfg),
+            },
+            {
+                "title": "Connect",
+                "body": "Click Connect to establish the laser connection.",
+                "widget": "connect_btn",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Manual Control",
+                "body": "Use FIRE, STANDBY, and STOP for manual control.",
+                "widget": "manual_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Set Time Window",
+                "body": "Set Start and End times for the program.",
+                "widget": "fire_entry",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Program Modes",
+                "body": (
+                    "Mode controls when the program runs:\n"
+                    "• everyday: runs every day\n"
+                    "• weekdays: runs Mon–Fri\n"
+                    "• selectday: runs only on selected dates\n"
+                    "• once: runs on one specific date"
+                ),
+                "widget": "mode_cb",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Set Durations",
+                "body": "Enter Fire/Rest in minutes. Example: 1.30 or 1.3 means 1 minute 30 seconds.",
+                "widget": "rest_entry",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Program Controls",
+                "body": "Add, start, stop, or remove programs using these buttons.",
+                "widget": "add_program_btn",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Preview",
+                "body": "Use Preview Fire Times to verify the schedule before starting.",
+                "widget": "preview_btn",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Start Program",
+                "body": "Click Start Program to run. Status will show Firing/Resting.",
+                "widget": "start_program_btn",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Temperature Control",
+                "body": "Enable Temp Control and set Max Temp if you want automatic protection.",
+                "widget": "temp_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Roof Control",
+                "body": "Use Open/Close and Auto Open/Close for the sliding roof.",
+                "widget": "roof_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Monitor",
+                "body": "Watch Telemetry and Logs while running. Use Stop if needed.",
+                "widget": "tele_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Charts",
+                "body": "Realtime charts show Fire/Rest state and temperature trends.",
+                "widget": "charts_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+            {
+                "title": "Logs",
+                "body": "Check logs for status messages and troubleshooting.",
+                "widget": "logs_frame",
+                "on_show": lambda: self._nb.select(self._tab_main),
+            },
+        ]
+        self._tutorial = TutorialOverlay(self, steps, self._ui_refs)
+        self._tutorial.start()
+
     def _auto_update_status(self):
         if self.laser:
             try:
@@ -792,8 +940,8 @@ class App(tk.Tk):
             # "fire_min": tk.IntVar(value=1),
             # "rest_min": tk.IntVar(value=1),
 
-            "fire_ms": tk.IntVar(value=60000),   # ค่าเริ่มต้น 60000 ms = 1 นาที
-            "rest_ms": tk.IntVar(value=60000),
+            "fire_ms": tk.StringVar(value="1"),   # minutes, supports M.SS (e.g., 2.30)
+            "rest_ms": tk.StringVar(value="1"),
 
             "once_date": tk.StringVar(value=date.today().isoformat()),
             "sel_dates": set(),  # only select date (set of date)
@@ -816,8 +964,8 @@ class App(tk.Tk):
             vars["mode"].set(init_data.get("mode", "everyday"))
             vars["start"].set(init_data.get("start", "16:30"))
             vars["end"].set(init_data.get("end", "16:50"))
-            vars["fire_ms"].set(int(init_data.get("fire_ms", 60000)))
-            vars["rest_ms"].set(int(init_data.get("rest_ms", 60000)))
+            vars["fire_ms"].set(self._ms_to_minutes_text(int(init_data.get("fire_ms", 60000))))
+            vars["rest_ms"].set(self._ms_to_minutes_text(int(init_data.get("rest_ms", 60000))))
 
 
             vars["edit_mode"] = tk.BooleanVar(value=True)  # เริ่มต้นแก้ไขได้
@@ -849,6 +997,8 @@ class App(tk.Tk):
 
         mode_cb.pack(side=tk.LEFT, padx=4)
         vars["mode_cb"] = mode_cb
+        if "mode_cb" not in self._ui_refs:
+            self._ui_refs["mode_cb"] = mode_cb
 
 
         # row_name = ttk.Frame(tab); row_name.pack(fill=tk.X, pady=3)
@@ -872,12 +1022,17 @@ class App(tk.Tk):
         ttk.Label(row1, text="End (HH:MM)").pack(side=tk.LEFT)
         vars["end_entry"] = ttk.Entry(row1, textvariable=vars["end"], width=8)
         vars["end_entry"].pack(side=tk.LEFT, padx=4)
-        ttk.Label(row1, text="Fire (Milisec)").pack(side=tk.LEFT)
+        ttk.Label(row1, text="Fire (min)").pack(side=tk.LEFT)
         vars["fire_entry"] = ttk.Entry(row1, textvariable=vars["fire_ms"], width=10)
         vars["fire_entry"].pack(side=tk.LEFT, padx=4)
-        ttk.Label(row1, text="Rest (Milisec)").pack(side=tk.LEFT)
+        ttk.Label(row1, text="Rest (min)").pack(side=tk.LEFT)
         vars["rest_entry"] = ttk.Entry(row1, textvariable=vars["rest_ms"], width=10)
         vars["rest_entry"].pack(side=tk.LEFT, padx=4)
+
+        if "fire_entry" not in self._ui_refs:
+            self._ui_refs["fire_entry"] = vars["fire_entry"]
+        if "rest_entry" not in self._ui_refs:
+            self._ui_refs["rest_entry"] = vars["rest_entry"]
 
         # Row 2: date area by mode
         date_area = ttk.Frame(tab); date_area.pack(fill=tk.X, pady=3)
@@ -904,8 +1059,11 @@ class App(tk.Tk):
         ttk.Button(row2, text="Calculate Cycles",
                 command=lambda i=idx: self.preview_cycles(i)).pack(side=tk.LEFT, padx=4)
 
-        ttk.Button(row2, text="Preview Fire Times",
-                command=lambda i=idx: self.preview_fire_times(i)).pack(side=tk.LEFT, padx=4)
+        btn_preview = ttk.Button(row2, text="Preview Fire Times",
+                command=lambda i=idx: self.preview_fire_times(i))
+        btn_preview.pack(side=tk.LEFT, padx=4)
+        if "preview_btn" not in self._ui_refs:
+            self._ui_refs["preview_btn"] = btn_preview
 
         cyc = ttk.Label(row2, text="LOOP = -"); cyc.pack(side=tk.LEFT, padx=8)
 
@@ -922,7 +1080,10 @@ class App(tk.Tk):
 
         # Row 4: start/stop/remove
         row3 = ttk.Frame(tab); row3.pack(fill=tk.X, pady=3)
-        ttk.Button(row3, text="Start Program", command=lambda v=vars: self.start_program(_cur_idx(v))).pack(side=tk.LEFT, padx=4)
+        btn_start_prog = ttk.Button(row3, text="Start Program", command=lambda v=vars: self.start_program(_cur_idx(v)))
+        btn_start_prog.pack(side=tk.LEFT, padx=4)
+        if "start_program_btn" not in self._ui_refs:
+            self._ui_refs["start_program_btn"] = btn_start_prog
         ttk.Button(row3, text="Stop Program",  command=lambda v=vars: self.stop_program(_cur_idx(v))).pack(side=tk.LEFT, padx=4)
         ttk.Button(row3, text="Remove Program",command=lambda v=vars: self.remove_program(_cur_idx(v))).pack(side=tk.LEFT, padx=4)
         ttk.Button(row3, text="Duplicate",     command=lambda v=vars: self.duplicate_program(_cur_idx(v))).pack(side=tk.LEFT, padx=4)
@@ -1008,8 +1169,8 @@ class App(tk.Tk):
             "mode": v["mode"].get().lower(),
             "start": v["start"].get(),
             "end": v["end"].get(),
-            "fire_ms": int(v["fire_ms"].get()),
-            "rest_ms": int(v["rest_ms"].get()),
+            "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
+            "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
         }
 
         if init_data["mode"] == "once":
@@ -1110,13 +1271,13 @@ class App(tk.Tk):
             pass
 
     def pick_once_date(self, v: dict):
-        dlg = CalendarDialog(self, title="เลือกวัน (Once)", multi=False)
+        dlg = CalendarDialog(self, title="Select Date (Once)", multi=False)
         if dlg.result:
             d = sorted(list(dlg.result))[0]
             v["once_date"].set(d.isoformat())
 
     def pick_multi_dates(self, v: dict):
-        dlg = CalendarDialog(self, title="เลือกหลายวัน (Only select date)", multi=True, initial=v["sel_dates"])
+        dlg = CalendarDialog(self, title="Select Multiple Dates", multi=True, initial=v["sel_dates"])
         if dlg.result is not None:
             v["sel_dates"] = set(dlg.result)
             self._render_date_area(v)
@@ -1388,10 +1549,10 @@ class App(tk.Tk):
     def apply_qsdelay(self):
         val = self.qsdelay_var.get().strip()
         if not re.fullmatch(r"\d+", val):
-            messagebox.showerror("QSDELAY", "กรุณาใส่ตัวเลขจำนวนเต็ม (µs)"); return
+            messagebox.showerror("QSDELAY", "Please enter an integer value (µs)."); return
         iv = int(val)
         if not (0 <= iv <= 400):
-            messagebox.showwarning("QSDELAY", "ช่วงที่แนะนำ 0 – 400 µs")
+            messagebox.showwarning("QSDELAY", "Recommended range: 0 – 400 µs.")
         self._send(f"$QSDELAY {iv}")
         self.log(f"QSDELAY → {iv} µs")
         self.save_config()
@@ -1400,13 +1561,13 @@ class App(tk.Tk):
         raw = self.freq_var.get().strip()
         m = re.fullmatch(r"(?i)\s*([0-9]+(?:\.\d+)?)\s*([kKmM]?)\s*", raw)
         if not m:
-            messagebox.showerror("Frequency", "รูปแบบไม่ถูกต้อง (เช่น 20 หรือ 1k)"); return
+            messagebox.showerror("Frequency", "Invalid format (e.g., 20 or 1k)."); return
         val = float(m.group(1)); unit = m.group(2).lower()
         if unit == "k": val *= 1000
         elif unit == "m": val *= 1_000_000
         hz = int(val)
         if not (1 <= hz <= 22):
-            messagebox.showwarning("Frequency", "ช่วงที่แนะนำ 1 – 22 Hz")
+            messagebox.showwarning("Frequency", "Recommended range: 1 – 22 Hz.")
         self._send(f"$DFREQ {hz}")
         self.log(f"DFREQ → {hz} Hz")
         self.save_config()
@@ -1421,7 +1582,7 @@ class App(tk.Tk):
 
     def _start_telemetry(self):
         if not self.laser:
-            messagebox.showwarning("Telemetry", "ยังไม่ได้เชื่อมต่ออุปกรณ์")
+            messagebox.showwarning("Telemetry", "Device not connected.")
             self.record_var.set(False); return
 
         path = self.csv_name_var.get().strip() or self._default_csv_name()
@@ -1440,7 +1601,7 @@ class App(tk.Tk):
                         "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS"
                     ])
         except Exception as e:
-            messagebox.showerror("CSV", f"ไม่สามารถสร้างไฟล์ CSV: {e}")
+            messagebox.showerror("CSV", f"Cannot create CSV file: {e}")
             self.record_var.set(False); return
 
         if self.tele_thread and self.tele_thread.is_alive():
@@ -1496,8 +1657,12 @@ class App(tk.Tk):
                 else:
                     l = self.last_ltemf_value
 
-                # overload ตาม LTEMF > max
-                overload = (l is not None and maxv is not None and l > maxv)
+                # overload according to LTEMF > max (only when Temp Control is enabled)
+                try:
+                    temp_enabled = bool(self.temp_ctl_enabled.get())
+                except Exception:
+                    temp_enabled = True
+                overload = (temp_enabled and l is not None and maxv is not None and l > maxv)
 
                 try:
                     self.after(0, lambda dd=d, ll=l: self._append_telemetry_point(
@@ -1666,14 +1831,22 @@ class App(tk.Tk):
                         # แจ้งเตือน
                         # self.log(f"Over-Temp: LTEMF={val:.2f} > Max={maxv:.2f} → STANDBY (CSV continues)")
                         try:
-                            messagebox.showwarning("Over-Temperature",
-                                                f"LTEMF = {val:.2f} °C > Max {maxv:.2f} °C\nระบบส่ง STANDBY แล้ว (ยังบันทึก CSV ต่อ)")
+                            messagebox.showwarning(
+                                "Over-Temperature",
+                                f"LTEMF = {val:.2f} °C > Max {maxv:.2f} °C\nSTANDBY sent (CSV continues)."
+                            )
                         except Exception:
                             print(f"Over-Temperature: LTEMF={val:.2f} °C > {maxv:.2f} °C (STANDBY sent)")
 
                     elif val <= (maxv - hysteresis) and self._temp_alarm_active:
                         # อุณหภูมิลดลงพอแล้ว: เคลียร์ธงเพื่อให้แจ้งได้อีกครั้งหากเกินซ้ำ
                         self._temp_alarm_active = False
+            else:
+                self._temp_alarm_active = False
+                try:
+                    self._ui_call(self._hide_overheat_popup)
+                except Exception:
+                    pass
         finally:
             try:
                 self.after(1000, self._temp_monitor_tick)
@@ -1746,8 +1919,8 @@ class App(tk.Tk):
             start_dt = self._parse_hhmm_into(date.today(), v["start"].get())
             end_dt = self._parse_hhmm_into(date.today(), v["end"].get())
             if end_dt <= start_dt: end_dt += timedelta(days=1)
-            fire_td = timedelta(milliseconds=int(v["fire_ms"].get()))
-            rest_td = timedelta(milliseconds=int(v["rest_ms"].get()))
+            fire_td = timedelta(milliseconds=self._minutes_text_to_ms(v["fire_ms"].get()))
+            rest_td = timedelta(milliseconds=self._minutes_text_to_ms(v["rest_ms"].get()))
             n = FireRestScheduler.count_fire_cycles(start_dt, end_dt, fire_td, rest_td)
             v["cycle_label"].config(text=f"LOOP = {n} cycles")
             self._sched_log(idx, f"Preview cycles: {start_dt} → {end_dt}, fire={fire_td}, rest={rest_td} → {n} cycles")
@@ -1766,8 +1939,8 @@ class App(tk.Tk):
             if end_dt <= start_dt:
                 end_dt += timedelta(days=1)
 
-            fire_td = timedelta(milliseconds=int(v["fire_ms"].get()))
-            rest_td = timedelta(milliseconds=int(v["rest_ms"].get()))
+            fire_td = timedelta(milliseconds=self._minutes_text_to_ms(v["fire_ms"].get()))
+            rest_td = timedelta(milliseconds=self._minutes_text_to_ms(v["rest_ms"].get()))
 
             if fire_td.total_seconds() <= 0:
                 raise ValueError("Fire duration must be greater than 0 minutes.")
@@ -1808,8 +1981,33 @@ class App(tk.Tk):
         if idx < 0 or idx >= len(self.programs): return
         v = self.programs[idx]
         v["progbar"].configure(maximum=max(1, total), value=done)
-        v["count_lbl"].config(text=f"{done} / {total} ครั้ง" if total > 0 else "")
+        v["count_lbl"].config(text=f"{done} / {total} times" if total > 0 else "")
         v["status_lbl"].config(text=state)
+
+    def _parse_minutes_text(self, text: str) -> float:
+        s = (text or "").strip().replace(",", ".")
+        if not s:
+            raise ValueError("Duration is required.")
+        if "." in s:
+            left, right = s.split(".", 1)
+            if right.isdigit() and len(right) in (1, 2):
+                minutes = int(left) if left else 0
+                seconds = int(right) * 10 if len(right) == 1 else int(right)
+                if seconds >= 60:
+                    raise ValueError("Seconds must be between 00 and 59.")
+                return minutes + (seconds / 60.0)
+        return float(s)
+
+    def _minutes_text_to_ms(self, text: str) -> int:
+        return int(round(self._parse_minutes_text(text) * 60000))
+
+    def _ms_to_minutes_text(self, ms: int) -> str:
+        total_sec = int(round(ms / 1000.0))
+        minutes = total_sec // 60
+        seconds = total_sec % 60
+        if seconds == 0:
+            return f"{minutes}"
+        return f"{minutes}.{seconds:02d}"
 
     def compute_next_occurrence(self, idx: int, now_dt: datetime):
         if idx < 0 or idx >= len(self.programs):
@@ -1928,7 +2126,7 @@ class App(tk.Tk):
 
         # ถ้ากำลังรันอยู่ ต้อง Stop ก่อน
         if v.get("runner") and v["runner"].is_alive():
-            messagebox.showwarning("Program running", "ต้อง Stop Program ก่อนจึงจะแก้ไขได้")
+            messagebox.showwarning("Program running", "Please stop the program before editing.")
             return
 
         self._set_program_editable(v, True)
@@ -1962,8 +2160,8 @@ class App(tk.Tk):
         # เคลียร์ของเก่า
         self.stop_program(idx)
 
-        fire_ms = int(v["fire_ms"].get())
-        rest_ms = int(v["rest_ms"].get())
+        fire_ms = self._minutes_text_to_ms(v["fire_ms"].get())
+        rest_ms = self._minutes_text_to_ms(v["rest_ms"].get())
 
         self._set_program_editable(v, False)
         self._sched_log(idx, "Program locked (Start)")
@@ -2193,9 +2391,9 @@ class App(tk.Tk):
                     if next_s:
                         # ข้อความหน้า UI ให้ต่างกันเล็กน้อย
                         if mode_now == "everyday":
-                            state_txt = f"Done (รอรอบถัดไป {next_s.strftime('%Y-%m-%d %H:%M')})"
+                            state_txt = f"Done (next run {next_s.strftime('%Y-%m-%d %H:%M')})"
                         else:  # select day
-                            state_txt = f"Done (รอวันถัดไปที่เลือก {next_s.strftime('%Y-%m-%d %H:%M')})"
+                            state_txt = f"Done (next selected day {next_s.strftime('%Y-%m-%d %H:%M')})"
                     else:
                         state_txt = "Done"
                 else:
@@ -2371,8 +2569,8 @@ class App(tk.Tk):
                     "mode": v["mode"].get().lower(),  
                     "start": v["start"].get(),
                     "end": v["end"].get(),
-                    "fire_ms": int(v["fire_ms"].get()),
-                    "rest_ms": int(v["rest_ms"].get()),
+                    "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
+                    "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
 
                 }
                 if item["mode"] == "once":
@@ -2587,8 +2785,8 @@ class App(tk.Tk):
                 def _warn():
                     try:
                         self._warn_roof(
-                            "Roof Closed!", 
-                            "ตรวจพบว่าหลังคาปิดระหว่างการยิงเลเซอร์\nระบบได้สั่งหยุดเลเซอร์เพื่อความปลอดภัย"
+                            "Roof Closed!",
+                            "Roof closed during laser firing.\nThe laser was stopped for safety."
                             )
                     except Exception:
                         pass
@@ -2664,7 +2862,7 @@ class App(tk.Tk):
             frm = tk.Frame(self.overheat_win, bg="#8B0000", padx=14, pady=14)
             frm.pack(fill="both", expand=True)
 
-            self.lbl_over_title = tk.Label(frm, text="อุณหภูมิเลเซอร์สูงเกินกำหนด!", 
+            self.lbl_over_title = tk.Label(frm, text="Laser temperature is too high!", 
                                         font=("Segoe UI", 14, "bold"), fg="white", bg="#8B0000")
             self.lbl_over_title.pack(anchor="w")
 
@@ -2673,12 +2871,12 @@ class App(tk.Tk):
             self.lbl_over_val.pack(anchor="center", pady=(6, 8))
 
             self.lbl_over_hint = tk.Label(frm, 
-                text="ระบบสั่ง STANDBY อัตโนมัติ\nหน้าต่างนี้จะปิดเองเมื่ออุณหภูมิลดลงต่ำกว่า Max",
+                text="STANDBY was sent automatically.\nThis window will close after temperature drops below Max.",
                 font=("Segoe UI", 9), fg="white", bg="#8B0000", justify="left")
             self.lbl_over_hint.pack(anchor="w")
 
             # ปุ่มปิดด้วยมือ (ไม่บังคับใช้ แต่ให้มี)
-            btn = tk.Button(frm, text="ปิดหน้าต่างนี้", command=self._hide_overheat_popup, cursor="hand2")
+            btn = tk.Button(frm, text="Close", command=self._hide_overheat_popup, cursor="hand2")
             btn.pack(anchor="e", pady=(8, 0))
 
         # อัปเดตค่าปัจจุบัน
@@ -2863,7 +3061,7 @@ class App(tk.Tk):
                         0,
                         lambda: self._warn_roof(
                             "Roof Closed!",
-                            "ตรวจพบว่าหลังคาปิดระหว่างการยิงเลเซอร์\nระบบได้สั่งหยุดเลเซอร์ทันทีเพื่อความปลอดภัย"
+                            "Roof closed during laser firing.\nThe laser was stopped immediately for safety."
                         )
                     )
                 except Exception as e:
@@ -2919,7 +3117,7 @@ class App(tk.Tk):
 
         msg = message
         if ts_text:
-            msg = f"{message}\n\nเวลาที่ตรวจพบ: {ts_text}"
+            msg = f"{message}\n\nDetected at: {ts_text}"
 
         try:
             messagebox.showwarning(title, msg)
@@ -2927,7 +3125,7 @@ class App(tk.Tk):
             pass
 
     def _patch_messagebox_with_timestamp(self):
-        """ทำให้ messagebox ทุกประเภทเติมวันเวลาอัตโนมัติ (ครั้งเดียว)"""
+        """Append timestamp to all messageboxes (once)."""
         import tkinter.messagebox as messagebox
         from datetime import datetime
 
@@ -2954,15 +3152,15 @@ class App(tk.Tk):
                 return ""
 
         def _append_ts(msg: str) -> str:
-            # กันซ้ำ: ถ้ามีคำว่า "เวลาที่ตรวจพบ" แล้ว ไม่เติมซ้ำ
+            # Avoid duplicates: if message already contains "Detected at", do not append.
             if not isinstance(msg, str):
                 msg = str(msg)
-            if "AT Time:" in msg:
+            if "Detected at:" in msg:
                 return msg
             ts = _now_text()
             if not ts:
                 return msg
-            return f"{msg}\n\nAT Time: {ts}"
+            return f"{msg}\n\nDetected at: {ts}"
 
         def showwarning(title, message, *args, **kwargs):
             return messagebox._orig_showwarning(title, _append_ts(message), *args, **kwargs)
