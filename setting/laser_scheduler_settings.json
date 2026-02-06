@@ -7,7 +7,7 @@
   "roof_api_base": "http://192.168.3.150:8000/door",
   "limit_api_url": "http://192.168.3.150:8000/limit/status",
   "log_dir": "D:/work-lidar/laser-gen3/v3/logs",
-  "safety_fire_enabled": true,
+  "safety_fire_enabled": false,
   "prefire_open_sec": 15.0,
   "postrest_close_sec": 5.0,
   "programs": [
