@@ -2009,6 +2009,19 @@ class App(tk.Tk):
             return f"{minutes}"
         return f"{minutes}.{seconds:02d}"
 
+    def _next_fire_time(self, now_dt: datetime, start_dt: datetime, end_dt: datetime, fire_ms: int, rest_ms: int):
+        if now_dt <= start_dt:
+            return start_dt
+        cycle = timedelta(milliseconds=fire_ms + rest_ms)
+        if cycle.total_seconds() <= 0:
+            return None
+        elapsed = now_dt - start_dt
+        cycles = int(elapsed // cycle)
+        next_start = start_dt + (cycle * (cycles + 1))
+        if next_start >= end_dt:
+            return None
+        return next_start
+
     def compute_next_occurrence(self, idx: int, now_dt: datetime):
         if idx < 0 or idx >= len(self.programs):
             return None, None
@@ -2033,9 +2046,8 @@ class App(tk.Tk):
                 # ยังไม่ถึงเวลาเริ่มของวันนี้ → รอวันนี้
                 return s, e
             elif s <= now_dt < e:
-                # อยู่ในช่วงของวันนี้ → เริ่มทันที ณ เวลาปัจจุบัน และจบตอน e
-                start_now = now_dt.replace(second=0, microsecond=0)
-                return start_now, e
+                # Inside today's window -> return window start, caller will align to next fire time
+                return s, e
             else:
                 # เลยช่วงของวันนี้แล้ว → ไปวันถัดไป
                 return mk_se(today + timedelta(days=1))
@@ -2050,8 +2062,7 @@ class App(tk.Tk):
             if now_dt < s:
                 return s, e
             if s <= now_dt < e:
-                start_now = now_dt.replace(second=0, microsecond=0)
-                return start_now, e
+                return s, e
             return None, None
 
         elif mode in ("weekdays", "weekday"):
@@ -2066,8 +2077,7 @@ class App(tk.Tk):
             if now_dt < s:
                 return s, e
             elif s <= now_dt < e:
-                start_now = now_dt.replace(second=0, microsecond=0)
-                return start_now, e
+                return s, e
             else:
                 # ไปวันทำงานถัดไป
                 d += timedelta(days=1)
@@ -2085,8 +2095,7 @@ class App(tk.Tk):
             if today in v["sel_dates"]:
                 s, e = mk_se(today)
                 if s <= now_dt < e:
-                    start_now = now_dt.replace(second=0, microsecond=0)
-                    return start_now, e
+                    return s, e
 
             for d in sorted(v["sel_dates"]):
                 s, e = mk_se(d)
@@ -2193,6 +2202,14 @@ class App(tk.Tk):
                 if not s_dt:
                     self._sched_log(idx, "ไม่มีรอบถัดไป (จบโปรแกรมตามเงื่อนไข)")
                     break
+
+                # If already inside the window, align to the next fire time instead of starting immediately
+                if s_dt <= now_dt < e_dt:
+                    aligned = self._next_fire_time(now_dt, s_dt, e_dt, fire_ms, rest_ms)
+                    if aligned is None:
+                        self._sched_log(idx, "No remaining fire time in the current window")
+                        break
+                    s_dt = aligned
 
                 try:
                     self._schedule_prefire_api(idx, s_dt)
