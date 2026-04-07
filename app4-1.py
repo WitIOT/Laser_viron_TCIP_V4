@@ -1,4 +1,4 @@
-# app3.py
+﻿# app3.py
 from __future__ import annotations
 import socket, threading, queue, time, csv, os, re, json, calendar
 from datetime import datetime, timedelta, timezone, date
@@ -962,13 +962,22 @@ class App(tk.Tk):
             try:
                 status = self.laser.get_status()  # อาจได้ None ถ้า BUSY/timeout
                 if status:                        # มีค่าใหม่ค่อยอัปเดต
-                    self.laser_status_var.set(f"Laser: {status}")
-                    # self.log(f"STATUS → {status}")
+                    disp = status
+
+                    # เพิ่มสถานะ Standby (Warm) จาก DTEMF
+                    # ใช้ค่า cache ล่าสุดจาก _ui_telemetry_tick เพื่อลดการยิงคำสั่งซ้ำ/ชน lock
+                    try:
+                        if isinstance(status, str) and "STANDBY" in status.upper():
+                            dtemf = getattr(self, "last_dtemf", None)
+                            if dtemf is not None and float(dtemf) <= 26.98:
+                                disp = "Standby (Warming)"
+                    except Exception:
+                        pass
+
+                    self.laser_status_var.set(f"Laser: {disp}")
+                    # self.log(f"STATUS → {disp}")
             except Exception as e:
-                self.laser_status_var.set("Laser: ERROR")
-                # self.log(f"STATUS error: {e}")
-        else:
-            self.laser_status_var.set("Laser: -")
+                self.log(f"อ่าน STATUS ล้มเหลว: {e}")
 
         # เว้น 5 วินาทีตามที่ต้องการ
         self.after(5000, self._auto_update_status)
