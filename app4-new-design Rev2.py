@@ -451,6 +451,14 @@ class App(tk.Tk):
         self.roof_preopen_sec = 15  # เปิดก่อน FIRE กี่วินาที
         self.roof_postclose_sec = 3  # ปิดหลัง REST กี่วินาที
 
+        # --- Monday warmup logic ---
+        self.monday_warmup_enabled_var = tk.BooleanVar(value=False)
+        self.monday_warmup_threshold_var = tk.DoubleVar(value=26.90)
+        self.monday_warmup_lead_min_var = tk.IntVar(value=30)
+        self._monday_warmup_sent = {}
+        self._monday_ready = {}
+        self._monday_last_poll = {}
+
         self._ui_refs = {}
         self._tutorial = None
         self._qsdelay_last_poll = 0.0
@@ -758,6 +766,17 @@ class App(tk.Tk):
             command=_on_toggle_safety
         ).grid(row=3, column=0, columnspan=2, sticky="w", padx=6, pady=6)
 
+        ttk.Checkbutton(
+            lf,
+            text="Enable Monday STANDBY warmup logic",
+            variable=self.monday_warmup_enabled_var
+        ).grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=6)
+
+        ttk.Label(lf, text="Warmup lead (min)").grid(row=5, column=0, sticky="w", padx=6, pady=6)
+        ttk.Entry(lf, textvariable=self.monday_warmup_lead_min_var, width=12).grid(row=5, column=1, sticky="w", padx=6, pady=6)
+
+        ttk.Label(lf, text="DTEMF ready >= (°C)").grid(row=6, column=0, sticky="w", padx=6, pady=6)
+        ttk.Entry(lf, textvariable=self.monday_warmup_threshold_var, width=12).grid(row=6, column=1, sticky="w", padx=6, pady=6)
 
         def browse_dir():
             try:
@@ -808,6 +827,7 @@ class App(tk.Tk):
             self.roof_api_base = self.roof_api_base_var.get().strip()
             self.limit_api_url = self.limit_api_url_var.get().strip()
             self.safety_fire_enabled = bool(self.safety_fire_enabled_var.get())
+            self.monday_warmup_enabled = bool(self.monday_warmup_enabled_var.get())
 
             try:
                 self.roof_preopen_sec = max(0.0, float(self.prefire_open_sec_var.get()))
@@ -832,6 +852,11 @@ class App(tk.Tk):
                 self.safety_fire_enabled = bool(self.safety_fire_enabled_var.get())
             except Exception:
                 self.safety_fire_enabled = bool(getattr(self, "safety_fire_enabled", True))
+
+            try:
+                self.monday_warmup_enabled = bool(self.monday_warmup_enabled_var.get())
+            except Exception:
+                self.monday_warmup_enabled = bool(getattr(self, "monday_warmup_enabled", False))
 
             self.log(
                 "Apply Config: อัปเดต roof_api_base / limit_api_url / logs directory แล้ว | "
@@ -2148,6 +2173,85 @@ class App(tk.Tk):
             return None
         return next_start
 
+    def clear_dtemf_cache(self):
+        self.last_dtemf = None
+        try:
+            self.lbl_dtemf.config(text="-")
+        except Exception:
+            pass
+
+    def _reset_monday_warmup_state(self, idx: int):
+        self._monday_warmup_sent[idx] = False
+        self._monday_ready[idx] = False
+        self._monday_last_poll[idx] = 0.0
+
+    def _maybe_run_monday_warmup(self, idx: int, mode_now: str, start_dt: datetime):
+        if mode_now not in ("weekdays", "weekday"):
+            return
+        if not bool(self.monday_warmup_enabled_var.get()):
+            return
+        if start_dt.weekday() != 0:
+            return
+
+        lead_min = max(0, int(self.monday_warmup_lead_min_var.get()))
+        threshold = float(self.monday_warmup_threshold_var.get())
+        warmup_dt = start_dt - timedelta(minutes=lead_min)
+        now_dt = datetime.now(TZ)
+
+        if now_dt < warmup_dt:
+            return
+
+        if not self._monday_warmup_sent.get(idx, False):
+            self.clear_dtemf_cache()
+            self.tele_pause_until = time.monotonic() + 1.5
+            try:
+                self._send("$STANDBY")
+                self._sched_log(idx, f"Monday warmup: send STANDBY at {now_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            except Exception as e:
+                self._sched_log(idx, f"Monday warmup: STANDBY failed: {e}")
+            self._monday_warmup_sent[idx] = True
+
+        last_poll = float(self._monday_last_poll.get(idx, 0.0))
+        if (time.monotonic() - last_poll) < 5.0:
+            return
+
+        self._monday_last_poll[idx] = time.monotonic()
+        d = self._query_float_quiet("$DTEMF ?", timeout_s=0.35)
+        if d is None:
+            return
+
+        self.last_dtemf = d
+        try:
+            self.after(0, lambda v=d: self.lbl_dtemf.config(text=f"{v}"))
+        except Exception:
+            pass
+
+        if d >= threshold:
+            if not self._monday_ready.get(idx, False):
+                self._sched_log(idx, f"Monday warmup READY: DTEMF={d:.2f} >= {threshold:.2f}")
+            self._monday_ready[idx] = True
+        else:
+            self._sched_log(idx, f"Monday warmup WARMING: DTEMF={d:.2f} < {threshold:.2f}")
+
+    def _finalize_friday_weekday_window(self, idx: int, mode_now: str, start_dt: datetime):
+        if mode_now not in ("weekdays", "weekday"):
+            return
+        if not bool(self.monday_warmup_enabled_var.get()):
+            return
+        if start_dt.weekday() != 4:
+            return
+
+        self.tele_pause_until = time.monotonic() + 1.5
+        try:
+            self._send("$STOP")
+            self._sched_log(idx, "Friday final cycle done -> STOP")
+        except Exception as e:
+            self._sched_log(idx, f"Friday final cycle STOP failed: {e}")
+
+        self.clear_dtemf_cache()
+        self._reset_monday_warmup_state(idx)
+        self._sched_log(idx, "Friday final cycle done -> DTEMF cache cleared")
+
     def compute_next_occurrence(self, idx: int, now_dt: datetime):
         if idx < 0 or idx >= len(self.programs):
             return None, None
@@ -2300,7 +2404,7 @@ class App(tk.Tk):
 
         self._set_program_editable(v, False)
         self._sched_log(idx, "Program locked (Start)")
-
+        self._reset_monday_warmup_state(idx)
 
         # ใช้ event ที่เก็บใน dict (จะได้สั่งหยุดจาก stop_program ได้)
         v["manager_stop"] = threading.Event()
@@ -2365,6 +2469,11 @@ class App(tk.Tk):
                         time.sleep(0.2)
 
                     now2 = datetime.now(TZ)
+                    try:
+                        self._maybe_run_monday_warmup(idx, v["mode"].get().lower(), s_dt)
+                    except Exception as e:
+                        self._sched_log(idx, f"Monday warmup logic error: {e}")
+
                     if now2 >= (s_dt - timedelta(seconds=LEAD)):
                         break
 
@@ -2500,6 +2609,12 @@ class App(tk.Tk):
                 v["active_thread"] = fr
                 fr.start()
                 fr.join()
+
+                try:
+                    self._finalize_friday_weekday_window(idx, v["mode"].get().lower(), s_dt)
+                except Exception as e:
+                    self._sched_log(idx, f"Friday finalize logic error: {e}")
+
                 self._cancel_api_timers_for(idx)    # << ใส่บรรทัดนี้
 
 
@@ -2574,6 +2689,7 @@ class App(tk.Tk):
         except Exception:
             pass
 
+        self._reset_monday_warmup_state(idx)
 
         # 1) หยุดเธรดผู้จัดการ
         if v.get("manager_stop") is not None:
@@ -2701,6 +2817,9 @@ class App(tk.Tk):
                 "limit_api_url": getattr(self, "limit_api_url", ""),
                 "log_dir": getattr(self, "log_dir", LOG_DIR),
                 "safety_fire_enabled": bool(self._is_safety_fire_enabled()),
+                "monday_warmup_enabled": bool(self.monday_warmup_enabled_var.get()),
+                "monday_warmup_lead_min": int(self.monday_warmup_lead_min_var.get()),
+                "monday_warmup_threshold": float(self.monday_warmup_threshold_var.get()),
                 "prefire_open_sec": float(getattr(self, "roof_preopen_sec", 15)),
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
                 "programs": []
@@ -2785,14 +2904,36 @@ class App(tk.Tk):
             # runtime flag (เผื่อโค้ดเก่า)
             self.safety_fire_enabled = enabled
 
+            monday_enabled = bool(data.get("monday_warmup_enabled", False))
+            monday_lead_min = int(data.get("monday_warmup_lead_min", 30))
+            monday_threshold = float(data.get("monday_warmup_threshold", 26.90))
+
             # UI variable (checkbox)
             if hasattr(self, "safety_fire_enabled_var"):
                 self.safety_fire_enabled_var.set(enabled)
             else:
                 self.safety_fire_enabled_var = tk.BooleanVar(value=enabled)
 
+            if hasattr(self, "monday_warmup_enabled_var"):
+                self.monday_warmup_enabled_var.set(monday_enabled)
+            else:
+                self.monday_warmup_enabled_var = tk.BooleanVar(value=monday_enabled)
+
+            if hasattr(self, "monday_warmup_lead_min_var"):
+                self.monday_warmup_lead_min_var.set(monday_lead_min)
+            else:
+                self.monday_warmup_lead_min_var = tk.IntVar(value=monday_lead_min)
+
+            if hasattr(self, "monday_warmup_threshold_var"):
+                self.monday_warmup_threshold_var.set(monday_threshold)
+            else:
+                self.monday_warmup_threshold_var = tk.DoubleVar(value=monday_threshold)
+
             try:
-                self.log(f"Config loaded: Safety Fire = {'ON' if enabled else 'OFF'}")
+                self.log(
+                    f"Config loaded: Safety Fire = {'ON' if enabled else 'OFF'} | "
+                    f"Monday Warmup = {'ON' if monday_enabled else 'OFF'}"
+                )
             except Exception:
                 pass
             self._update_roof_auto_label()
