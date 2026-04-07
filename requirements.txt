@@ -1,0 +1,19 @@
+# requirements.txt
+# Generated from app4-new-design_Rev2.py
+
+# GUI framework (built-in with Python, no install needed)
+# tkinter  # ← มาพร้อม Python standard library
+
+# Plotting
+matplotlib>=3.7.0
+
+# HTTP requests (used by api_clients.py)
+requests>=2.28.0
+
+# Local/project modules (ต้องมีไฟล์เหล่านี้ในโปรเจกต์)
+# api_clients.py       ← SlidingRoofClient, LimitStatusClient, RoofResult
+# tutorial_overlay.py  ← TutorialOverlay
+
+# Python standard library (ไม่ต้อง install เพิ่ม):
+# socket, threading, queue, time, csv, os, re, json, calendar
+# datetime, zoneinfo (Python 3.9+)

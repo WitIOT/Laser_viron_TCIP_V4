@@ -1,0 +1,4 @@
+git pull https://github.com/WitIOT/Laser_viron_TCIP_V4.git
+
+pip install -r requirements.txt
+
