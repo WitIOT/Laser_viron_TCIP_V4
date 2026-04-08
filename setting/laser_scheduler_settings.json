@@ -4,28 +4,28 @@
   "user": "VR70AB07",
   "qsdelay": "220",
   "freq": "20",
-<<<<<<< HEAD
   "roof_api_base": "http://192.168.49.8:8000/door",
   "limit_api_url": "http://192.168.49.8:8000/limit/status",
   "log_dir": "C:/Users/LiDAR/OneDrive - NARIT (1)/LiDAR/LiDAR-data/Laser-logs",
   "safety_fire_enabled": true,
-=======
-  "roof_api_base": "http://192.168.3.150:8000/door",
-  "limit_api_url": "http://192.168.3.150:8000/limit/status",
-  "log_dir": "D:/work-lidar/laser-gen3/v3/logs",
-  "safety_fire_enabled": false,
->>>>>>> c90c4896de25db29e2ceaef9aee4fa733b820550
+  "roof_auto_ctrl_enabled": true,
+  "max_ltemf": 30.0,
+  "max_dtemf": 55.0,
+  "monday_warmup_enabled": true,
+  "monday_warmup_lead_min": 30,
+  "monday_warmup_threshold": 26.9,
   "prefire_open_sec": 15.0,
   "postrest_close_sec": 5.0,
   "programs": [
     {
       "name": "Program 1",
       "enabled": true,
-      "mode": "everyday",
-      "start": "16:30",
-      "end": "16:50",
-      "fire_ms": 60000,
-      "rest_ms": 60000
+      "mode": "once",
+      "start": "08:58",
+      "end": "16:00",
+      "fire_ms": 120000,
+      "rest_ms": 480000,
+      "once_date": "2026-04-08"
     }
   ]
 }
