@@ -61,6 +61,11 @@ installer ติดตั้งแบบ **per-user** (`%LOCALAPPDATA%\Programs\
 3. สร้าง GitHub Release **tag = `v13.0.1`** แล้วแนบ zip นั้นเป็น asset
 4. เครื่องที่ติดตั้งอยู่จะเห็นและอัปเดตได้เอง
 
+## เอกสารการพัฒนา
+
+- [Flow Chart](docs/FLOWCHART.md) — แผนภาพการทำงาน (startup, วงจร fire/rest, ระบบความปลอดภัย, auto-update)
+- [Development Guide](docs/DEVELOPMENT.md) — สถาปัตยกรรม, โมดูล, threading, logic ความปลอดภัย, build/test/release
+
 ## หมายเหตุ
 
 - ไฟล์ `setting/` และ `logs/` เป็น runtime state (ไม่เก็บใน git — ดู `.gitignore`)
