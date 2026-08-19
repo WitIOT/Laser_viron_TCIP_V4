@@ -16,3 +16,6 @@ release_assets/
 # Runtime state (มี IP/user ของอุปกรณ์ + ข้อมูลรัน ไม่ควรอยู่ใน git)
 setting/
 logs/
+
+# Old project snapshots (runtime data — keep on disk, out of git)
+old/
