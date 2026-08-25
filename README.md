@@ -65,6 +65,7 @@ installer ติดตั้งแบบ **per-user** (`%LOCALAPPDATA%\Programs\
 
 - [Flow Chart](docs/FLOWCHART.md) — แผนภาพการทำงาน (startup, วงจร fire/rest, ระบบความปลอดภัย, auto-update)
 - [Diagrams เชิงลึก](docs/DIAGRAMS.md) — sequence / state machine / class / data flow พร้อมคำอธิบายละเอียด
+- [Weather Protection & Safety](docs/WEATHER_SAFETY.md) — Rain Sensor + การผสานระบบความปลอดภัย (ฝน/อุณหภูมิ/หลังคา)
 - [Development Guide](docs/DEVELOPMENT.md) — สถาปัตยกรรม, โมดูล, threading, logic ความปลอดภัย, build/test/release
 
 ## หมายเหตุ

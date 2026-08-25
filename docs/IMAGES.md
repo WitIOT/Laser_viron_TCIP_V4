@@ -45,3 +45,17 @@
 
 ### 12. Data Flow — Telemetry & Sensors
 ![data-flow](images/diagram-7-data-flow.png)
+
+## Weather Protection & Safety Integration
+
+### 13. ภาพรวมการผสานระบบป้องกันสภาพอากาศ
+![weather-integration](images/weather-1-integration.png)
+
+### 14. Rain Sensor — ลำดับ poll และตัดสินใจ
+![rain-poll](images/weather-2-rain-poll.png)
+
+### 15. Rain Sensor — State Machine
+![rain-state](images/weather-3-rain-state.png)
+
+### 16. Rain Sensor — ลำดับเหตุการณ์เมื่อฝนตก
+![rain-sequence](images/weather-4-rain-sequence.png)
