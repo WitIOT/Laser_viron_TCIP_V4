@@ -19,3 +19,6 @@ logs/
 
 # Old project snapshots (runtime data — keep on disk, out of git)
 old/
+
+# Mermaid intermediate files
+docs/_mmd/
