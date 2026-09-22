@@ -1462,10 +1462,8 @@ class App(tk.Tk):
         _scan_subnet_ent.grid(row=0, column=1, padx=4, pady=8, sticky="w")
         self._ui_refs["scan_subnet_entry"] = _scan_subnet_ent
 
-        ttk.Label(ctrl, text="Port:").grid(row=0, column=2, padx=(12, 4), sticky="w")
+        # Port สแกนตายตัวที่ 23 (พอร์ตเลเซอร์) — ไม่แสดงช่องกรอกให้ผู้ใช้
         self._scan_port_var = tk.IntVar(value=23)
-        ttk.Entry(ctrl, textvariable=self._scan_port_var, width=7).grid(
-            row=0, column=3, padx=4, sticky="w")
 
         ttk.Label(ctrl, text="Timeout (s):").grid(row=0, column=4, padx=(12, 4), sticky="w")
         self._scan_timeout_var = tk.DoubleVar(value=0.3)
@@ -2175,9 +2173,9 @@ class App(tk.Tk):
             {"title": "แท็บ Network Scanner — ตั้งค่าสแกน",
              "body": ("ใช้หา IP เลเซอร์อัตโนมัติเมื่อไม่ทราบ:\n"
                       "• Subnet = วงเครือข่าย (เช่น 192.168.1)\n"
-                      "• Port = พอร์ตที่จะลองต่อ (มาตรฐาน 23)\n"
                       "• Timeout = รอกี่วินาทีต่อ IP (0.3 กำลังดี)\n"
-                      "• Range = ช่วงเลขท้าย IP ที่จะสแกน (1–254)"),
+                      "• Range = ช่วงเลขท้าย IP ที่จะสแกน (1–254)\n"
+                      "(สแกนพอร์ต 23 ของเลเซอร์ให้อัตโนมัติ)"),
              "widget": "scan_subnet_entry", "on_show": netscan},
 
             {"title": "Network Scanner — เริ่มสแกน",
