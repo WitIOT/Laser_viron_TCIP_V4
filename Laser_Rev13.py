@@ -111,6 +111,9 @@ os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SETTINGS_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(SETTINGS_DIR, "laser_scheduler_settings.json")
 
+# พอร์ตเริ่มต้นของเลเซอร์ — ใช้เมื่อผู้ใช้เว้นช่อง Port ว่าง (ไม่ต้องระบุ Port)
+DEFAULT_LASER_PORT = 2323
+
 
 # ---------------- Laser Client ----------------
 class LaserClient:
@@ -1267,7 +1270,9 @@ class App(tk.Tk):
         conn_cfg.columnconfigure(1, weight=1)
 
         self.ip_var = tk.StringVar(value="127.0.0.1")
-        self.port_var = tk.IntVar(value=2323)
+        # Port เป็น StringVar เพื่อให้ 'เว้นว่างได้' (ไม่ต้องระบุ Port)
+        # ถ้าเว้นว่างจะใช้ DEFAULT_LASER_PORT อัตโนมัติ
+        self.port_var = tk.StringVar(value="")
         self.user_var = tk.StringVar(value="VR70AB07")
 
         ttk.Label(conn_cfg, text="IP").grid(row=0, column=0, sticky="w", padx=6, pady=6)
@@ -1277,6 +1282,8 @@ class App(tk.Tk):
         ttk.Label(conn_cfg, text="Port").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         port_entry = ttk.Entry(conn_cfg, textvariable=self.port_var, width=10)
         port_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text=f"(ไม่ระบุก็ได้ — ค่าเริ่มต้น {DEFAULT_LASER_PORT})",
+                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6, pady=6)
 
         ttk.Label(conn_cfg, text="User").grid(row=2, column=0, sticky="w", padx=6, pady=6)
         user_entry = ttk.Entry(conn_cfg, textvariable=self.user_var, width=16)
@@ -2926,8 +2933,21 @@ class App(tk.Tk):
             self.after(1000, self._ui_telemetry_tick)
 
     # ---------- Connection & Commands ----------
+    def _get_laser_port(self) -> int:
+        """คืนพอร์ตที่ใช้จริง — ถ้าช่อง Port ว่าง/ไม่ถูกต้อง ใช้ DEFAULT_LASER_PORT"""
+        try:
+            raw = str(self.port_var.get()).strip()
+        except Exception:
+            raw = ""
+        if not raw:
+            return DEFAULT_LASER_PORT
+        try:
+            return int(raw)
+        except Exception:
+            return DEFAULT_LASER_PORT
+
     def connect(self):
-        host, port = self.ip_var.get().strip(), self.port_var.get()
+        host, port = self.ip_var.get().strip(), self._get_laser_port()
         try:
             self.laser = LaserClient(host, port); self.laser.connect()
             self.log(f"Connected to {host}:{port}")
@@ -4283,7 +4303,7 @@ class App(tk.Tk):
         try:
             data = {
                 "ip": self.ip_var.get().strip(),
-                "port": int(self.port_var.get()),
+                "port": self._get_laser_port(),
                 "user": self.user_var.get().strip(),
                 "qsdelay": self.qsdelay_var.get().strip(),
                 "freq": self.freq_var.get().strip(),
@@ -4350,7 +4370,9 @@ class App(tk.Tk):
         try:
             # ---------- Main tab ----------
             self.ip_var.set(data.get("ip", self.ip_var.get()))
-            self.port_var.set(int(data.get("port", self.port_var.get())))
+            # Port อาจไม่มีใน config (เว้นว่างได้) — เก็บเป็นสตริง, ว่าง = ใช้ default ตอน connect
+            _saved_port = data.get("port", "")
+            self.port_var.set("" if _saved_port in (None, "") else str(_saved_port))
             self.user_var.set(data.get("user", self.user_var.get()))
             self.qsdelay_var.set(data.get("qsdelay", self.qsdelay_var.get()))
             self.freq_var.set(data.get("freq", self.freq_var.get()))
