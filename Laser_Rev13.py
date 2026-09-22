@@ -760,6 +760,9 @@ class App(tk.Tk):
         try:
             self._roof_poll_stop = True
             self._rain_poll_stop = True
+            # หยุด network scan ที่อาจกำลังรันอยู่ (กัน callback หลังปิดหน้าต่าง)
+            if hasattr(self, "_scan_stop_flag"):
+                self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
             if self.laser:
@@ -1573,14 +1576,30 @@ class App(tk.Tk):
     def _net_scan_start(self):
         if self._scan_running:
             return
-        subnet  = self._scan_subnet_var.get().strip()
-        timeout = float(self._scan_timeout_var.get())
-        start   = max(1,   int(self._scan_start_var.get()))
-        end     = min(254, int(self._scan_end_var.get()))
+        subnet  = self._scan_subnet_var.get().strip().rstrip(".")
+        # อ่านค่าอย่างทนทาน — เว้นว่าง/ผิดรูปแบบ ใช้ค่าเริ่มต้นแทน (ไม่ให้ crash)
+        try:
+            timeout = max(0.05, float(self._scan_timeout_var.get()))
+        except Exception:
+            timeout = 0.3
+        try:
+            start = max(1, min(254, int(self._scan_start_var.get())))
+        except Exception:
+            start = 1
+        try:
+            end = max(1, min(254, int(self._scan_end_var.get())))
+        except Exception:
+            end = 254
+        if start > end:
+            start, end = end, start
 
-        if not subnet:
-            messagebox.showwarning("Scan", "Please enter a subnet (e.g. 192.168.1)")
+        if not subnet or not re.fullmatch(r"\d{1,3}(\.\d{1,3}){2}", subnet):
+            messagebox.showwarning(
+                "Scan", "Please enter a valid subnet prefix (e.g. 192.168.1)")
             return
+
+        # โหลดฐาน OUI ครั้งเดียวบน main thread ก่อน (กัน 80 threads โหลดพร้อมกัน)
+        self._load_oui_db()
 
         self._net_scan_clear()
         self._scan_running = True
@@ -2181,7 +2200,14 @@ class App(tk.Tk):
             global LOG_DIR
             self.roof_api_base = self.roof_api_base_var.get().strip()
             self.limit_api_url = self.limit_api_url_var.get().strip()
-            self.rain_enabled = bool(self.rain_enabled_var.get())
+            # ใช้ _apply_rain_enabled เพื่อให้ปิด/เปิด poll + ปิด popup ให้เรียบร้อย
+            _new_rain = bool(self.rain_enabled_var.get())
+            if _new_rain != bool(getattr(self, "rain_enabled", True)):
+                self._apply_rain_enabled(_new_rain)   # เปลี่ยนสถานะ → apply side-effect
+            else:
+                self.rain_enabled = _new_rain
+                if not _new_rain:
+                    self._close_rain_popup()           # ปิดอยู่แล้วแต่เผื่อ popup ค้าง
             self.sensor_enabled = bool(self.sensor_enabled_var.get())
             self.sensor_api_url = self.sensor_api_url_var.get().strip()
             try:
@@ -5131,6 +5157,9 @@ class App(tk.Tk):
         try:
             self._roof_poll_stop = True
             self._rain_poll_stop = True
+            # หยุด network scan ที่อาจกำลังรันอยู่ (กัน callback หลังปิดหน้าต่าง)
+            if hasattr(self, "_scan_stop_flag"):
+                self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
             if self.laser: self.laser.close()
@@ -5248,6 +5277,17 @@ class App(tk.Tk):
             text = raw[:19].replace("T", " ")
             return f"{text} (UTC+7)" if text else "-"
 
+    def _close_rain_popup(self):
+        """ปิดหน้าต่าง 'Rain Detected!' ถ้ายังเปิดค้างอยู่ (main thread)"""
+        win = getattr(self, "_rain_popup_win", None)
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except Exception:
+                pass
+        self._rain_popup_win = None
+
     def _apply_rain_enabled(self, enabled: bool):
         """เปิด/ปิด Rain Sensor – เรียกได้จาก main thread เท่านั้น"""
         self.rain_enabled = enabled
@@ -5272,6 +5312,8 @@ class App(tk.Tk):
             # หยุด poll
             self._rain_poll_stop = True
             self._rain_is_raining = False
+            # ปิดหน้าต่าง Rain popup ที่อาจค้างอยู่
+            self._close_rain_popup()
             # แสดง UI ว่าปิดอยู่
             try:
                 self.rain_status_var.set("Disabled")
