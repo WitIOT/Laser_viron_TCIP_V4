@@ -5,7 +5,11 @@
 # Rev13 ใช้ tkinter (ttk มาตรฐาน) + matplotlib — ไม่ได้ใช้ ttkbootstrap
 # โมดูลในโปรเจกต์ที่ต้อง bundle: api_clients.py, tutorial_overlay.py (auto-detect)
 
+import os
 datas = []
+# ฐานข้อมูล OUI (MAC → Manufacturer) สำหรับ Network Scanner — วางไว้ราก app
+if os.path.exists('oui.csv'):
+    datas.append(('oui.csv', '.'))
 binaries = []
 hiddenimports = ['matplotlib.backends.backend_tkagg']
 

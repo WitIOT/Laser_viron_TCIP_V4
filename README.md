@@ -11,6 +11,7 @@
 | `version.py` | เลขเวอร์ชันแอป (แหล่งเดียว — แก้ที่นี่ก่อน build) |
 | `updater.py` | ระบบ auto-update ผ่าน GitHub Releases (swap-in-place) |
 | `api_clients.py` | client สำหรับ Sliding Roof / Limit status API |
+| `oui.csv` | ฐานข้อมูล OUI (MAC→Manufacturer) ของ Network Scanner (จาก nmap/IEEE) |
 | `tutorial_overlay.py` | overlay สอนใช้งาน |
 | `test_Laser_Rev13.py` | unit tests (roof/laser safety interlock) |
 | `test_updater.py` | unit tests (logic เทียบเวอร์ชัน/เช็ค release) |

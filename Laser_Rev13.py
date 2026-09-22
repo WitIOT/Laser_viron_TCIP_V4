@@ -73,7 +73,7 @@
 #           ถ้า limit API ล่มจน cache หมดอายุจะคืน "N/A" ซึ่งไม่ตัดเลเซอร์
 #
 from __future__ import annotations
-import socket, threading, queue, time, csv, os, re, json, calendar
+import socket, threading, queue, time, csv, os, sys, re, json, calendar
 from datetime import datetime, timedelta, timezone, date
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -831,7 +831,7 @@ class App(tk.Tk):
         nb.add(tab_main,    text="Main")
         nb.add(tab_cfg,     text="Settings / Config")
         nb.add(tab_network, text="Network Scanner")
-        nb.add(tab_conn,    text="Connection Settings")
+        nb.add(tab_conn,    text="Test Connection")
         self._nb = nb
         self._tab_main    = tab_main
         self._tab_cfg     = tab_cfg
@@ -1446,9 +1446,11 @@ class App(tk.Tk):
     #  Network Scanner Tab                                                 #
     # ------------------------------------------------------------------ #
     def _build_network_tab(self, parent):
-        """Tab: Network Scanner — scan หาอุปกรณ์ใน subnet แล้วลอง Telnet port"""
+        """Tab: Network Scanner — scan หาอุปกรณ์ใน subnet (แบบ Advanced IP Scanner)"""
         parent.columnconfigure(0, weight=1)
         parent.rowconfigure(1, weight=1)
+        self._scan_all = []                 # ผลลัพธ์ทั้งหมด (แหล่งข้อมูลหลักของตาราง)
+        self._scan_sort_key = ("ip", False) # (คอลัมน์, เรียงกลับ)
 
         # ---- Top controls ----
         ctrl = ttk.LabelFrame(parent, text="Scan Settings")
@@ -1462,8 +1464,7 @@ class App(tk.Tk):
         _scan_subnet_ent.grid(row=0, column=1, padx=4, pady=8, sticky="w")
         self._ui_refs["scan_subnet_entry"] = _scan_subnet_ent
 
-        # Port สแกนตายตัวที่ 23 (พอร์ตเลเซอร์) — ไม่แสดงช่องกรอกให้ผู้ใช้
-        self._scan_port_var = tk.IntVar(value=23)
+        # สแกนแบบ Ping ทุกเครื่อง (เหมือน Advanced IP Scanner)
 
         ttk.Label(ctrl, text="Timeout (s):").grid(row=0, column=4, padx=(12, 4), sticky="w")
         self._scan_timeout_var = tk.DoubleVar(value=0.3)
@@ -1495,8 +1496,16 @@ class App(tk.Tk):
         self._scan_progress = ttk.Progressbar(prog_frame, mode="determinate", length=400)
         self._scan_progress.grid(row=0, column=0, sticky="we", padx=(0, 8))
         self._scan_status_var = tk.StringVar(value="Ready")
-        ttk.Label(prog_frame, textvariable=self._scan_status_var, width=36).grid(
+        ttk.Label(prog_frame, textvariable=self._scan_status_var, width=40).grid(
             row=0, column=1, sticky="w")
+
+        # ช่องค้นหา — กรองตาราง (IP / MAC / Name)
+        ttk.Label(prog_frame, text="🔍 Search:").grid(row=0, column=2, padx=(12, 4), sticky="e")
+        self._scan_search_var = tk.StringVar()
+        _search_ent = ttk.Entry(prog_frame, textvariable=self._scan_search_var, width=22)
+        _search_ent.grid(row=0, column=3, sticky="w")
+        self._scan_search_var.trace_add("write", lambda *a: self._scan_refresh())
+        self._ui_refs["scan_search_entry"] = _search_ent
 
         # ---- results table ----
         result_frame = ttk.LabelFrame(parent, text="Found Devices")
@@ -1505,19 +1514,24 @@ class App(tk.Tk):
         result_frame.rowconfigure(0, weight=1)
         parent.rowconfigure(2, weight=1)
 
-        cols = ("ip", "hostname", "port", "ping_ms", "action")
+        # คอลัมน์แบบเดียวกับ Advanced IP Scanner
+        cols = ("status", "name", "ip", "manufacturer", "mac", "comments")
         self._scan_tree = ttk.Treeview(result_frame, columns=cols,
-                                        show="headings", height=14)
+                                        show="headings", height=14,
+                                        selectmode="extended")
         self._ui_refs["scan_results_tree"] = self._scan_tree
-        for col, w, txt in [
-            ("ip",       140, "IP Address"),
-            ("hostname", 200, "Hostname"),
-            ("port",      60, "Port"),
-            ("ping_ms",   80, "Latency (ms)"),
-            ("action",   120, ""),
+        for col, w, txt, anchor in [
+            ("status",        56, "Status",       "center"),
+            ("name",         190, "Name",         "w"),
+            ("ip",           130, "IP",           "w"),
+            ("manufacturer", 170, "Manufacturer", "w"),
+            ("mac",          150, "MAC address",  "w"),
+            ("comments",     210, "Comments",     "w"),
         ]:
-            self._scan_tree.heading(col, text=txt)
-            self._scan_tree.column(col, width=w, minwidth=w)
+            # คลิกหัวคอลัมน์เพื่อจัดเรียง (เหมือน Advanced IP Scanner)
+            self._scan_tree.heading(col, text=txt,
+                                    command=lambda c=col: self._scan_sort_col(c))
+            self._scan_tree.column(col, width=w, minwidth=50, anchor=anchor)
 
         vsb = ttk.Scrollbar(result_frame, orient="vertical",
                              command=self._scan_tree.yview)
@@ -1527,14 +1541,23 @@ class App(tk.Tk):
 
         # double-click → ใช้ IP นี้
         self._scan_tree.bind("<Double-1>", self._net_scan_use_selected)
+        # คัดลอกได้: Ctrl+C และคลิกขวา (เลือกหลายแถวด้วย Shift/Ctrl ได้)
+        self._scan_tree.bind("<Control-c>", lambda e: self._scan_copy("row"))
+        self._scan_tree.bind("<Control-C>", lambda e: self._scan_copy("row"))
+        self._scan_tree.bind("<Button-3>",  self._scan_popup_menu)
+        self._scan_tree.bind("<Control-a>",
+                             lambda e: (self._scan_tree.selection_set(
+                                 self._scan_tree.get_children()), "break")[1])
 
         btn_row = ttk.Frame(result_frame)
         btn_row.grid(row=1, column=0, columnspan=2, sticky="e", padx=4, pady=4)
         ttk.Button(btn_row, text="Use Selected IP",
                    command=self._net_scan_use_selected).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_row, text="Copy Selected",
+                   command=lambda: self._scan_copy("row")).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_row, text="Clear Results",
                    command=self._net_scan_clear).pack(side=tk.LEFT, padx=4)
-        ttk.Label(btn_row, text="Double-click a row to apply IP",
+        ttk.Label(btn_row, text="Double-click = apply IP · Ctrl+C / right-click = copy",
                   foreground="gray").pack(side=tk.LEFT, padx=8)
 
         # internal state
@@ -1543,6 +1566,7 @@ class App(tk.Tk):
 
     # -- scan helpers --
     def _net_scan_clear(self):
+        self._scan_all = []
         for row in self._scan_tree.get_children():
             self._scan_tree.delete(row)
 
@@ -1550,7 +1574,6 @@ class App(tk.Tk):
         if self._scan_running:
             return
         subnet  = self._scan_subnet_var.get().strip()
-        port    = int(self._scan_port_var.get())
         timeout = float(self._scan_timeout_var.get())
         start   = max(1,   int(self._scan_start_var.get()))
         end     = min(254, int(self._scan_end_var.get()))
@@ -1565,45 +1588,322 @@ class App(tk.Tk):
         self._scan_btn.config(state="disabled")
         self._scan_stop_btn.config(state="normal")
         total = end - start + 1
+        self._scan_total = total
         self._scan_progress.config(maximum=total, value=0)
-        self._scan_status_var.set(f"Scanning {subnet}.{start} – {subnet}.{end} ...")
+        self._scan_status_var.set(
+            f"Scanning {subnet}.{start} – {subnet}.{end} ...")
+
+        def _probe(ip):
+            """ตรวจเครื่อง → คืน dict ถ้ามีชีวิต (ตอบ ping หรือตอบ ARP) มิฉะนั้น None"""
+            if self._scan_stop_flag.is_set():
+                return None
+            alive, latency = self._ping_host(ip, timeout)
+            # ping ส่ง ARP ก่อนเสมอ → อ่าน MAC จาก cache ได้แม้ ping ถูกบล็อก
+            mac = self._get_mac(ip)
+            if not alive:
+                if not mac:
+                    return None          # ตายจริง (ไม่ตอบทั้ง ping และ ARP)
+                latency = None           # มีชีวิตแต่บล็อก ping (เจอผ่าน ARP)
+            return {
+                "ip":      ip,
+                "name":    self._device_name(ip),
+                "mac":     mac,
+                "vendor":  self._oui_vendor(mac),
+                "latency": latency,
+            }
 
         def worker():
+            import concurrent.futures
+            ips = [f"{subnet}.{last}" for last in range(start, end + 1)]
+            # ping ทีละหลายเครื่องพร้อมกันให้เร็ว (เหมือน Advanced IP Scanner)
+            workers = 80
+            done = 0
             found = 0
-            for i, last in enumerate(range(start, end + 1)):
-                if self._scan_stop_flag.is_set():
-                    break
-                ip = f"{subnet}.{last}"
-                t0 = time.monotonic()
-                try:
-                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s.settimeout(timeout)
-                    s.connect((ip, port))
-                    s.close()
-                    elapsed = int((time.monotonic() - t0) * 1000)
-                    # resolve hostname (best-effort)
-                    try:
-                        hostname = socket.gethostbyaddr(ip)[0]
-                    except Exception:
-                        hostname = "-"
-                    self.after(0, lambda _ip=ip, _h=hostname, _p=port, _ms=elapsed:
-                                self._scan_tree.insert("", tk.END,
-                                    values=(_ip, _h, _p, f"{_ms} ms",
-                                            "⇒ Double-click to use")))
-                    found += 1
-                except Exception:
-                    pass
-
-                # update progress every 5 hosts
-                if i % 5 == 0 or last == end:
-                    self.after(0, lambda v=i+1, f=found:
-                               (self._scan_progress.config(value=v),
-                                self._scan_status_var.set(
-                                    f"Scanned {v}/{total}  |  Found {f} device(s)")))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_probe, ip): ip for ip in ips}
+                for fut in concurrent.futures.as_completed(futures):
+                    done += 1
+                    if not self._scan_stop_flag.is_set():
+                        try:
+                            res = fut.result()
+                        except Exception:
+                            res = None
+                        if res:
+                            found += 1
+                            self.after(0, self._scan_insert_row, res)
+                    if done % 5 == 0 or done == total:
+                        self.after(0, lambda v=done, f=found:
+                                   (self._scan_progress.config(value=v),
+                                    self._scan_status_var.set(
+                                        f"Scanning… {v}/{total}  |  {f} alive")))
 
             self.after(0, self._net_scan_done)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    @staticmethod
+    def _scan_row_values(res):
+        """แปลง dict ผลลัพธ์ → tuple ค่าในตาราง"""
+        # ไม่มีชื่อ → แสดง IP ในคอลัมน์ Name (เหมือน Advanced IP Scanner)
+        name = res["name"] if res["name"] not in ("", "-") else res["ip"]
+        lat = res.get("latency")
+        if isinstance(lat, int):
+            status, comments = "●", f"{lat} ms"       # ตอบ ping
+        else:
+            status, comments = "○", "via ARP"          # เจอผ่าน ARP (บล็อก ping)
+        return (status, name, res["ip"], res["vendor"], res["mac"], comments)
+
+    def _scan_matches(self, res, query):
+        """True ถ้าแถวเข้ากับคำค้น (IP / MAC / Name / Manufacturer)"""
+        if not query:
+            return True
+        q = query.lower()
+        return (q in str(res["ip"]).lower()
+                or q in str(res["mac"]).lower()
+                or q in str(res["name"]).lower()
+                or q in str(res["vendor"]).lower())
+
+    def _scan_insert_row(self, res):
+        """เก็บผลลัพธ์ไว้ในลิสต์หลัก + แทรกลงตารางถ้าตรงกับคำค้น (main thread)"""
+        self._scan_all.append(res)
+        if self._scan_matches(res, self._scan_search_var.get().strip()):
+            self._scan_tree.insert("", tk.END, values=self._scan_row_values(res))
+
+    def _scan_refresh(self, *args):
+        """สร้างตารางใหม่จากลิสต์หลัก — กรองตามคำค้น + จัดเรียงตามสถานะปัจจุบัน"""
+        if not hasattr(self, "_scan_tree"):
+            return
+        query = self._scan_search_var.get().strip()
+        col, rev = getattr(self, "_scan_sort_key", ("ip", False))
+        rows = [r for r in self._scan_all if self._scan_matches(r, query)]
+        if col == "ip":
+            rows.sort(key=lambda r: self._ip_key(r["ip"]), reverse=rev)
+        elif col == "comments":
+            # ARP-only (latency None) จัดให้อยู่ท้ายเสมอ
+            rows.sort(key=lambda r: (r.get("latency") is None,
+                                     r.get("latency") or 0), reverse=rev)
+        else:
+            _keymap = {"name": "name", "manufacturer": "vendor", "mac": "mac"}
+            k = _keymap.get(col, "ip")
+            rows.sort(key=lambda r: str(r.get(k, "")).lower(), reverse=rev)
+        for r in self._scan_tree.get_children():
+            self._scan_tree.delete(r)
+        for r in rows:
+            self._scan_tree.insert("", tk.END, values=self._scan_row_values(r))
+        # อัปเดตแถบสถานะเมื่อไม่ได้กำลังสแกน (รวมกรณีล้าง filter → คืนสรุป alive/dead)
+        if not self._scan_running:
+            self._scan_status_var.set(self._scan_status_summary())
+
+    def _scan_status_summary(self):
+        """ข้อความสรุปสำหรับแถบสถานะ (คิดจากผลลัพธ์ + คำค้นปัจจุบัน)"""
+        if not self._scan_all:
+            return "Ready"
+        alive = len(self._scan_all)
+        dead  = max(0, getattr(self, "_scan_total", alive) - alive)
+        query = self._scan_search_var.get().strip()
+        if query:
+            shown = len(self._scan_tree.get_children())
+            return f"{alive} alive, {dead} dead · showing {shown} (filter: {query})"
+        return f"Done — {alive} alive, {dead} dead"
+
+    def _scan_copy(self, what="row"):
+        """คัดลอกแถวที่เลือกไปคลิปบอร์ด (รองรับหลายแถว)"""
+        sel = self._scan_tree.selection()
+        if not sel:
+            return
+        idx = {"name": 1, "ip": 2, "manufacturer": 3, "mac": 4, "comments": 5}
+        lines = []
+        for item in sel:
+            vals = self._scan_tree.item(item, "values")
+            if what == "row":
+                # ทุกคอลัมน์ยกเว้น Status (คั่นด้วย tab → วางใน Excel ได้)
+                lines.append("\t".join(str(v) for v in vals[1:]))
+            else:
+                lines.append(str(vals[idx[what]]))
+        text = "\n".join(lines)
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+        except Exception:
+            return
+        # แจ้งสั้นๆ ที่แถบสถานะ แล้วคืนค่าเดิม
+        self._scan_status_var.set(f"📋 Copied {len(sel)} row(s)")
+        self.after(1200, lambda: self._scan_status_var.set(
+            self._scan_status_summary()) if not self._scan_running else None)
+
+    def _scan_popup_menu(self, event):
+        """เมนูคลิกขวา → Copy"""
+        row = self._scan_tree.identify_row(event.y)
+        if row and row not in self._scan_tree.selection():
+            self._scan_tree.selection_set(row)
+        if not self._scan_tree.selection():
+            return
+        menu = tk.Menu(self._scan_tree, tearoff=0)
+        menu.add_command(label="Copy row(s)", command=lambda: self._scan_copy("row"))
+        menu.add_separator()
+        menu.add_command(label="Copy IP", command=lambda: self._scan_copy("ip"))
+        menu.add_command(label="Copy MAC address", command=lambda: self._scan_copy("mac"))
+        menu.add_command(label="Copy Name", command=lambda: self._scan_copy("name"))
+        menu.add_command(label="Copy Manufacturer",
+                         command=lambda: self._scan_copy("manufacturer"))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    # -- low-level probes (thread-safe, no shared Tk state) --
+    @staticmethod
+    def _tcp_open(ip, port, timeout):
+        """True ถ้าต่อ TCP ไปยัง ip:port ได้ภายใน timeout"""
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((ip, int(port)))
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _resolve_host(ip):
+        try:
+            return socket.gethostbyaddr(ip)[0]
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _netbios_name(ip):
+        """ดึงชื่อเครื่องผ่าน NetBIOS (nbtstat) — ใช้เมื่อ reverse DNS ไม่มีชื่อ"""
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["nbtstat", "-A", ip], capture_output=True, text=True, timeout=2,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            for line in (out.stdout or "").splitlines():
+                # ชื่อคอมพิวเตอร์ = entry <00> ที่เป็น UNIQUE
+                m = re.match(r"\s*(\S.*?)\s*<00>\s+UNIQUE", line)
+                if m:
+                    name = m.group(1).strip()
+                    if name and name != "__MSBROWSE__":
+                        return name
+        except Exception:
+            pass
+        return ""
+
+    @classmethod
+    def _device_name(cls, ip):
+        """ชื่อเครื่อง: reverse DNS ก่อน ถ้าไม่มีลอง NetBIOS"""
+        h = cls._resolve_host(ip)
+        if h and h != ip:
+            return h
+        nb = cls._netbios_name(ip)
+        return nb if nb else "-"
+
+    @staticmethod
+    def _ping_host(ip, timeout, retries=2):
+        """ping แบบ Windows (ลองซ้ำได้) → คืน (alive, latency_ms). ไม่เด้ง console."""
+        import subprocess
+        ms = max(200, int(float(timeout) * 1000))
+        for _ in range(max(1, retries)):
+            try:
+                out = subprocess.run(
+                    ["ping", "-n", "1", "-w", str(ms), ip],
+                    capture_output=True, text=True,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                text = (out.stdout or "")
+                if "TTL=" in text.upper():
+                    m = re.search(r"time[=<]\s*(\d+)\s*ms", text, re.IGNORECASE)
+                    return True, (int(m.group(1)) if m else 0)
+            except Exception:
+                pass
+        return False, 0
+
+    @staticmethod
+    def _get_mac(ip):
+        """อ่าน MAC address ของ ip จากตาราง ARP (ต้อง ping/ต่อ ip นั้นมาก่อน)"""
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["arp", "-a", ip], capture_output=True, text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            m = re.search(r"([0-9A-Fa-f]{2}[-:]){5}[0-9A-Fa-f]{2}", out.stdout or "")
+            if m:
+                mac = m.group(0).replace("-", ":").upper()
+                # ข้าม MAC ที่ไม่ใช่เครื่องจริง (broadcast/incomplete)
+                if mac not in ("FF:FF:FF:FF:FF:FF", "00:00:00:00:00:00"):
+                    return mac
+        except Exception:
+            pass
+        return ""
+
+    # OUI ที่มั่นใจว่าถูกต้อง (ที่เหลือปล่อยว่าง หรือโหลดจากไฟล์ manuf/oui.csv)
+    _OUI_SEED = {
+        "00:50:56": "VMware", "00:0C:29": "VMware", "00:05:69": "VMware",
+        "00:1C:14": "VMware", "08:00:27": "VirtualBox", "0A:00:27": "VirtualBox",
+        "52:54:00": "QEMU/KVM", "B8:27:EB": "Raspberry Pi",
+        "DC:A6:32": "Raspberry Pi", "E4:5F:01": "Raspberry Pi",
+        "D8:3A:DD": "Raspberry Pi", "2C:CF:67": "Raspberry Pi",
+    }
+    _OUI_DB = None   # cache (dict) — สร้างครั้งแรกที่เรียก
+
+    @classmethod
+    def _load_oui_db(cls):
+        """สร้างตาราง OUI→vendor ครั้งเดียว; โหลดจากไฟล์ oui.csv/manuf ข้างโปรแกรม"""
+        if cls._OUI_DB is not None:
+            return cls._OUI_DB
+        db = dict(cls._OUI_SEED)
+        # หาไฟล์ข้างสคริปต์ และ (ตอน build เป็น .exe) ในโฟลเดอร์ที่ PyInstaller แตกไฟล์
+        base_dirs = [os.path.dirname(os.path.abspath(__file__))]
+        _meipass = getattr(sys, "_MEIPASS", None)
+        if _meipass:
+            base_dirs.insert(0, _meipass)
+        for base in base_dirs:
+            for fname in ("oui.csv", "manuf", "oui.txt"):
+                path = os.path.join(base, fname)
+                try:
+                    if not os.path.exists(path):
+                        continue
+                    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                        for line in fh:
+                            line = line.strip()
+                            if not line or line.startswith("#"):
+                                continue
+                            # แยกเฉพาะตัวคั่นตัวแรก → เก็บชื่อ vendor ที่มี ',' ได้ครบ
+                            parts = re.split(r"[\t,;]", line, maxsplit=1)
+                            if len(parts) < 2:
+                                continue
+                            pref = parts[0].strip().replace("-", ":").upper()
+                            if re.fullmatch(r"[0-9A-F]{2}:[0-9A-F]{2}:[0-9A-F]{2}", pref):
+                                vendor = parts[1].split("#")[0].strip()
+                                if vendor:
+                                    db.setdefault(pref, vendor)
+                except Exception:
+                    pass
+            if len(db) > len(cls._OUI_SEED):
+                break   # โหลดสำเร็จจาก base นี้แล้ว ไม่ต้องหาต่อ
+        cls._OUI_DB = db
+        return db
+
+    @classmethod
+    def _oui_vendor(cls, mac):
+        if not mac or len(mac) < 8:
+            return ""
+        return cls._load_oui_db().get(mac[:8], "")
+
+    @staticmethod
+    def _ip_key(ip):
+        """คีย์เรียง IP ตามตัวเลขจริง (ไม่ใช่ string)"""
+        try:
+            return tuple(int(o) for o in str(ip).split("."))
+        except Exception:
+            return (0, 0, 0, 0)
+
+    def _scan_sort_col(self, col):
+        """คลิกหัวคอลัมน์เพื่อจัดเรียง (สลับ asc/desc) แล้ววาดตารางใหม่"""
+        cur_col, cur_rev = getattr(self, "_scan_sort_key", ("ip", False))
+        rev = (not cur_rev) if col == cur_col else False
+        self._scan_sort_key = (col, rev)
+        self._scan_refresh()
 
     def _net_scan_stop(self):
         self._scan_stop_flag.set()
@@ -1612,8 +1912,10 @@ class App(tk.Tk):
         self._scan_running = False
         self._scan_btn.config(state="normal")
         self._scan_stop_btn.config(state="disabled")
-        found = len(self._scan_tree.get_children())
-        self._scan_status_var.set(f"Done — {found} device(s) found")
+        # จัดเรียงตาม IP ให้อ่านง่าย (เหมือน Advanced IP Scanner)
+        self._scan_sort_key = ("ip", False)
+        self._scan_refresh()
+        self._scan_status_var.set(self._scan_status_summary())
 
     def _net_scan_use_selected(self, event=None):
         sel = self._scan_tree.selection()
@@ -1626,20 +1928,17 @@ class App(tk.Tk):
         if not sel:
             messagebox.showinfo("Select", "Please select a device from the list.")
             return
-        ip = self._scan_tree.item(sel[0])["values"][0]
-        port = self._scan_tree.item(sel[0])["values"][2]
-        # apply to Connection Settings tab
+        ip = str(self._scan_tree.set(sel[0], "ip"))
+        # 1) อัปเดต vars หลัก (แท็บ Settings/Config)
         if hasattr(self, "ip_var"):
-            self.ip_var.set(str(ip))
-        if hasattr(self, "port_var"):
-            try:
-                self.port_var.set(int(port))
-            except Exception:
-                pass
-        self.log(f"Network Scanner → applied IP={ip}, Port={port}")
+            self.ip_var.set(ip)
+        # 2) อัปเดตฟอร์มแท็บ Test Connection ให้ตรงกันด้วย
+        if hasattr(self, "_cs_ip_var"):
+            self._cs_ip_var.set(ip)
+        self.log(f"Network Scanner → applied IP={ip}")
         messagebox.showinfo("Applied",
-                            f"IP: {ip}\nPort: {port}\n\nApplied to Connection Settings.\n"
-                            "Click Connect on Main tab to connect.")
+                            f"IP: {ip}\n\nApplied to Settings/Config and Test Connection.\n"
+                            "Go to Test Connection or Main tab to connect.")
 
     # ------------------------------------------------------------------ #
     #  Connection Settings Tab                                             #
@@ -2145,8 +2444,8 @@ class App(tk.Tk):
                       "วงกลมแดงชี้จุดที่อธิบาย • กด Next เพื่อไปต่อ"),
              "widget": "connect_btn", "on_show": main},
 
-            # ================= TAB: Connection Settings =================
-            {"title": "แท็บ Connection Settings — ฟอร์มเชื่อมต่อ",
+            # ================= TAB: Test Connection =================
+            {"title": "แท็บ Test Connection — ฟอร์มเชื่อมต่อ",
              "body": ("กรอกข้อมูลเชื่อมต่อเลเซอร์:\n"
                       "• IP Address = IP เลเซอร์ (เช่น 192.168.103.103)\n"
                       "• Port = พอร์ต TCP (มาตรฐาน 23)\n"
@@ -2154,14 +2453,14 @@ class App(tk.Tk):
                       "ปุ่ม: Apply & Save (บันทึก), Test Connection (ทดสอบ), Connect Now (ต่อเลย)"),
              "widget": "cs_ip_entry", "on_show": conn},
 
-            {"title": "Connection Settings — Quick Presets",
+            {"title": "Test Connection — Quick Presets",
              "body": ("ปุ่มลัดตั้งค่าเชื่อมต่อสำเร็จรูป:\n"
                       "• Viron Default = IP/Port มาตรฐานของเครื่อง Viron\n"
                       "• Localhost Test = 127.0.0.1 (ทดสอบในเครื่อง)\n"
                       "กดแล้วช่อง IP/Port จะถูกเติมให้อัตโนมัติ"),
              "widget": "cs_preset_frame", "on_show": conn, "shape": R},
 
-            {"title": "Connection Settings — Saved Profiles",
+            {"title": "Test Connection — Saved Profiles",
              "body": ("บันทึกชุดการตั้งค่าไว้หลายชุด:\n"
                       "• ตั้งชื่อ Profile → Save Profile\n"
                       "• เลือกจากรายการ → Load Selected (โหลดกลับมาใช้)\n"
@@ -2175,7 +2474,7 @@ class App(tk.Tk):
                       "• Subnet = วงเครือข่าย (เช่น 192.168.1)\n"
                       "• Timeout = รอกี่วินาทีต่อ IP (0.3 กำลังดี)\n"
                       "• Range = ช่วงเลขท้าย IP ที่จะสแกน (1–254)\n"
-                      "(สแกนพอร์ต 23 ของเลเซอร์ให้อัตโนมัติ)"),
+                      "สแกนแบบ Ping ทุกเครื่องเหมือน Advanced IP Scanner"),
              "widget": "scan_subnet_entry", "on_show": netscan},
 
             {"title": "Network Scanner — เริ่มสแกน",
@@ -2185,7 +2484,10 @@ class App(tk.Tk):
              "widget": "scan_start_btn", "on_show": netscan},
 
             {"title": "Network Scanner — ผลลัพธ์",
-             "body": ("ตารางแสดงอุปกรณ์ที่เจอ: IP / Hostname / Port / Latency\n"
+             "body": ("ตาราง (เหมือน Advanced IP Scanner): Status / Name / IP /\n"
+                      "Manufacturer / MAC address / Comments\n"
+                      "• ช่อง 🔍 Search = กรองตาราง (IP / MAC / Name / Manufacturer)\n"
+                      "• คลิกหัวคอลัมน์เพื่อจัดเรียง · แถบล่างบอก alive/dead\n"
                       "• ดับเบิลคลิกแถว (หรือ Use Selected IP) → นำ IP ไปใส่ให้อัตโนมัติ\n"
                       "• Clear Results = ล้างผลลัพธ์\n"
                       "จากนั้นไปกด Connect ที่แท็บ Main ได้เลย"),
@@ -2193,8 +2495,8 @@ class App(tk.Tk):
 
             # ================= TAB: Settings / Config =================
             {"title": "แท็บ Settings/Config — Laser Connection",
-             "body": ("ตั้งค่า IP / Port / User ของเลเซอร์ (ซิงก์กับแท็บ Connection)\n"
-                      "แก้ที่นี่หรือที่ Connection Settings ก็ได้ ค่าจะตรงกัน"),
+             "body": ("ตั้งค่า IP / Port / User ของเลเซอร์ (ซิงก์กับแท็บ Test Connection)\n"
+                      "แก้ที่นี่หรือที่ Test Connection ก็ได้ ค่าจะตรงกัน"),
              "widget": "cfg_conn_frame", "on_show": cfg, "shape": R},
 
             {"title": "Settings/Config — Roof Settings (สำคัญ)",
