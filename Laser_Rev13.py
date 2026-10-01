@@ -530,7 +530,8 @@ class App(tk.Tk):
         )
         self.title(f"Laser Software Rev13  (v{APP_VERSION})")
         self.geometry("1460x900")
-        self.minsize(900, 600)      # ขนาดต่ำสุดที่ยังใช้ได้
+        # ต่ำสุด = ผลรวม minsize ของ 3 คอลัมน์ + ขอบ → เนื้อหาไม่ถูกตัดตอนย่อ
+        self.minsize(1400, 640)
         self.resizable(True, True)  # ปรับขนาดได้ทั้งสองแกน
 
         self._roof_state_cached = "N/A"
@@ -1182,9 +1183,10 @@ class App(tk.Tk):
 
         # Responsive column weights: left panel | right panel | rain sensor
         # col0=left panel, col1=right panel (programs+logs), col2=sensors
-        root.columnconfigure(0, weight=2, minsize=320)
-        root.columnconfigure(1, weight=4)
-        root.columnconfigure(2, weight=2, minsize=470)  # sensors + weather (ต้องกว้างพอ)
+        # minsize ของแต่ละคอลัมน์ = ความกว้างต่ำสุดที่เนื้อหาไม่ถูกตัดตอนย่อหน้าต่าง
+        root.columnconfigure(0, weight=2, minsize=320)   # left panel
+        root.columnconfigure(1, weight=4, minsize=580)   # Telemetry + Scheduled Programs
+        root.columnconfigure(2, weight=2, minsize=460)   # sensors + weather
         root.rowconfigure(3, weight=1)  # vis/charts row expands
 
     # ------------------------------------------------------------------ #
