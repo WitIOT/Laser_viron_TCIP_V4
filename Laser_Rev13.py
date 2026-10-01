@@ -1533,6 +1533,8 @@ class App(tk.Tk):
         card("Humidity", v["RH"],      "%",   1)
         card("Wind",     v["WS_ms"],   "m/s", 2)
         card("Rain",     v["Rain_mm"], "mm",  3)
+        for c in range(4):
+            wx.columnconfigure(c, weight=1)   # 4 การ์ดหลักกระจายเต็มความกว้าง
 
         # ---- grouped detail (2×2 mini frames) ----
         groups = [
@@ -1546,10 +1548,13 @@ class App(tk.Tk):
                               ("PA", "PA", ""), ("VR", "VR", "")]),
         ]
         gf = ttk.Frame(wx)
-        gf.grid(row=2, column=0, columnspan=4, sticky="we", padx=4, pady=(2, 2))
+        gf.grid(row=2, column=0, columnspan=4, sticky="nwe", padx=4, pady=(2, 2))
+        gf.columnconfigure(0, weight=1)
+        gf.columnconfigure(1, weight=1)       # 2 คอลัมน์กลุ่มย่อยกว้างเท่ากัน
         for i, (title, items) in enumerate(groups):
             lf = ttk.LabelFrame(gf, text=title)
-            lf.grid(row=i // 2, column=i % 2, sticky="nwe", padx=4, pady=4)
+            lf.grid(row=i // 2, column=i % 2, sticky="nsew", padx=4, pady=4)
+            lf.columnconfigure(1, weight=1)    # ดันค่าไปชิดขวาเต็มกล่อง
             for r, (lbl, key, unit) in enumerate(items):
                 ttk.Label(lf, text=lbl, font=("Segoe UI", 8),
                           foreground="gray").grid(row=r, column=0, sticky="w", padx=(6, 8), pady=1)
