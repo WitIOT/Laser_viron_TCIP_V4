@@ -3482,7 +3482,8 @@ class App(tk.Tk):
                 with open(path, "w", newline="", encoding="utf-8") as f:
                     csv.writer(f).writerow([
                         "Date", "Time", "Timezone",
-                        "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS"
+                        "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS",
+                        "In_Temp(C)", "In_RH(%)", "Out_Temp(C)", "Out_RH(%)"
                     ])
         except Exception as e:
             messagebox.showerror("CSV", f"Cannot create CSV file: {e}")
@@ -3587,6 +3588,7 @@ class App(tk.Tk):
                     tz_str = now.tzname() or "UTC+7"
 
                     roof_state = self._get_roof_status_cached()
+                    in_t, in_rh, out_t, out_rh = self._sensor_csv_values()
 
                     row = [
                         date_str,           # Date
@@ -3597,7 +3599,11 @@ class App(tk.Tk):
                         d if d is not None else "",  # DTEMF
                         l if l is not None else "",  # LTEMF
                         overload,           # overload flag
-                        roof_state          # ROOF_STATUS
+                        roof_state,         # ROOF_STATUS
+                        in_t,               # Indoor Temp (°C)
+                        in_rh,              # Indoor RH (%)
+                        out_t,              # Outdoor Temp (°C)
+                        out_rh              # Outdoor RH (%)
                     ]
 
                     # เขียนไฟล์หลัก (Timer หรือ Manual ปกติ)
@@ -3616,7 +3622,8 @@ class App(tk.Tk):
                                 with open(manual_path, "w", newline="", encoding="utf-8") as mf:
                                     csv.writer(mf).writerow([
                                         "Date", "Time", "Timezone",
-                                        "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS"
+                                        "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS",
+                                        "In_Temp(C)", "In_RH(%)", "Out_Temp(C)", "Out_RH(%)"
                                     ])
                                 self._manual_header_written = manual_path
 
@@ -5472,6 +5479,28 @@ class App(tk.Tk):
                 try: v.set("-")
                 except Exception: pass
             self.log("🌡 Temp/RH Sensor: DISABLED")
+
+    def _sensor_csv_values(self):
+        """ค่าล่าสุดของ Temp & RH Sensor สำหรับเขียนลง CSV
+        คืน (In_Temp, In_RH, Out_Temp, Out_RH) เป็นสตริง
+        - ว่าง ("") ถ้าปิดเซ็นเซอร์ หรือข้อมูลไม่สด (stale)
+        """
+        empty = ("", "", "", "")
+        if not getattr(self, "sensor_enabled", True):
+            return empty
+        ts = getattr(self, "_sensor_last_ok_ts", None)
+        stale = float(getattr(self, "_sensor_stale_sec", 30.0))
+        if ts is None or (time.monotonic() - ts) > stale:
+            return empty
+        try:
+            return (
+                f"{float(self._sensor_in_temp):.1f}",
+                f"{float(self._sensor_in_humi):.1f}",
+                f"{float(self._sensor_out_temp):.1f}",
+                f"{float(self._sensor_out_humi):.1f}",
+            )
+        except Exception:
+            return empty
 
     def _fetch_sensor_data(self, timeout: float = 5.0) -> dict | None:
         """GET /api/sensor คืน dict หรือ None"""
