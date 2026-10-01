@@ -1152,7 +1152,7 @@ class App(tk.Tk):
         self.prog_nb = ttk.Notebook(prog_box); self.prog_nb.pack(fill=tk.BOTH, expand=True)
 
         # Plots + Logs
-        vis = ttk.Panedwindow(root, orient=tk.HORIZONTAL); vis.grid(row=3, column=0, columnspan=3, sticky="nswe", padx=5, pady=5)
+        vis = ttk.Panedwindow(root, orient=tk.HORIZONTAL); vis.grid(row=3, column=0, columnspan=2, sticky="nswe", padx=5, pady=5)
         self.plot_frame = ttk.LabelFrame(vis, text="Realtime Charts")
         logs_container = ttk.LabelFrame(vis, text="Logs")
         vis.add(self.plot_frame, weight=3); vis.add(logs_container, weight=2)
