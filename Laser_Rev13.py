@@ -106,10 +106,34 @@ except Exception:
 # LOG_DIR = "logs"
 # LOG_DIR = r"C:\Users\LiDAR\OneDrive - NARIT (1)\LiDAR\LiDAR-data\Laser-logs"
 LOG_DIR = r"logs/data"
-SETTINGS_DIR = "setting"
+
+# เก็บ settings ในโฟลเดอร์ข้อมูลผู้ใช้ (%LOCALAPPDATA%\LaserControl) — อยู่นอกโฟลเดอร์
+# ติดตั้ง จึง "คงอยู่" แม้ auto-update จะ copy ทับโฟลเดอร์ติดตั้ง (กันค่าที่ตั้งไว้หาย/โดนทับ)
+_APP_DATA_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "LaserControl")
+SETTINGS_DIR = os.path.join(_APP_DATA_DIR, "setting")
 os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(SETTINGS_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(SETTINGS_DIR, "laser_scheduler_settings.json")
+
+# ย้าย config เดิมจากโฟลเดอร์ติดตั้ง (เวอร์ชันก่อนหน้าที่เก็บไว้ใน .\setting) มาที่ใหม่
+# ครั้งแรกที่ยังไม่มีไฟล์ใหม่ — ผู้ใช้จะไม่เสียค่าที่ตั้งไว้ตอนอัปเกรด
+if not os.path.exists(CONFIG_FILE):
+    try:
+        import shutil
+        if getattr(sys, "frozen", False):
+            _app_dir = os.path.dirname(sys.executable)
+        else:
+            _app_dir = os.path.dirname(os.path.abspath(__file__))
+        for _legacy in (
+            os.path.join(_app_dir, "setting", "laser_scheduler_settings.json"),
+            os.path.join("setting", "laser_scheduler_settings.json"),
+        ):
+            if os.path.exists(_legacy):
+                shutil.copy2(_legacy, CONFIG_FILE)
+                break
+    except Exception:
+        pass
 
 # พอร์ตเริ่มต้นของเลเซอร์ — ใช้เมื่อผู้ใช้เว้นช่อง Port ว่าง (ไม่ต้องระบุ Port)
 DEFAULT_LASER_PORT = 2323
@@ -564,6 +588,21 @@ class App(tk.Tk):
         self._sensor_out_humi  = 0.0
         self._sensor_out_dew   = 0.0
 
+        # --- Weather Station UI variables (ทุก field เริ่มเป็น "-" รอต่อ API ภายหลัง) ---
+        self._WX_FIELDS = [
+            "RecNum", "TimeStamp", "BattV", "PTemp_C",
+            "AirT_C", "RH", "RHT_C", "VP_mbar", "BP_mbar",
+            "WS_ms", "WindDir", "MaxWS_ms", "WSPrev", "WindDirPrev",
+            "MaxWSprev", "Invalid_Wind",
+            "Rain_mm", "Strikes", "Dist_km",
+            "SlrFD_W", "SlrTF_MJ", "PPFD",
+            "TiltNS_deg", "TiltWE_deg",
+            "VWC", "EC", "T", "P", "PA", "VR",
+        ]
+        self._wx_vars       = {k: tk.StringVar(value="-") for k in self._WX_FIELDS}
+        self._wx_status_var = tk.StringVar(value="Offline")
+        self._wx_ts_var     = tk.StringVar(value="-")
+
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
         self.rain_api_url_var      = tk.StringVar(value=self.rain_api_url)
         self.rain_timeout_var      = tk.DoubleVar(value=self.rain_api_timeout)
@@ -961,6 +1000,10 @@ class App(tk.Tk):
         ttk.Label(sensor_frm, textvariable=self.sensor_ts_var,
                   font=("Segoe UI", 8),
                   foreground="gray").grid(row=2, column=1, columnspan=6, sticky="w", padx=2, pady=(2,6))
+
+        # --- Weather Station display in Main (card-based, same style) ---
+        self._build_weather_panel(root, row=3, column=2)
+
         # Telemetry
         tele = ttk.LabelFrame(root, text="Telemetry – DTEMF / LTEMF")
         tele.grid(row=1, column=1, sticky="nwe", padx=5, pady=5)
@@ -1444,6 +1487,79 @@ class App(tk.Tk):
         btn_cfg_save = ttk.Button(btns, text="Apply & Save", command=self._apply_and_save_config)
         btn_cfg_save.pack(side=tk.RIGHT, padx=4)
         self._ui_refs["config_save_btn"] = btn_cfg_save
+
+    # ------------------------------------------------------------------ #
+    #  Weather Station panel (Main tab)                                    #
+    # ------------------------------------------------------------------ #
+    def _build_weather_panel(self, root, row, column):
+        """การ์ด Weather Station ในแท็บ Main — แสดงค่าจาก weather station
+        (ทุกช่องเริ่มเป็น '-' รอต่อ API ภายหลัง — ใช้ self._wx_vars[...] อัปเดต)"""
+        wx = ttk.LabelFrame(root, text="Weather Station")
+        wx.grid(row=row, column=column, sticky="nwe", padx=5, pady=5)
+        self._ui_refs["weather_frame"] = wx
+        v = self._wx_vars
+
+        # ---- header: status · Rec · Batt ----
+        head = ttk.Frame(wx)
+        head.grid(row=0, column=0, columnspan=4, sticky="we", padx=6, pady=(4, 2))
+        self._wx_status_lbl = ttk.Label(head, textvariable=self._wx_status_var,
+                                        font=("Segoe UI", 8, "bold"),
+                                        foreground="gray")
+        self._wx_status_lbl.pack(side="left")
+        ttk.Label(head, text="  ·  Rec ", font=("Segoe UI", 8),
+                  foreground="gray").pack(side="left")
+        ttk.Label(head, textvariable=v["RecNum"], font=("Segoe UI", 8)).pack(side="left")
+        ttk.Label(head, text="   Batt ", font=("Segoe UI", 8),
+                  foreground="gray").pack(side="left")
+        ttk.Label(head, textvariable=v["BattV"], font=("Segoe UI", 8)).pack(side="left")
+        ttk.Label(head, text=" V", font=("Segoe UI", 8),
+                  foreground="gray").pack(side="left")
+
+        # ---- primary 4 cards ----
+        def card(label, var, unit, col):
+            frm = ttk.Frame(wx, relief="groove", borderwidth=1)
+            frm.grid(row=1, column=col, padx=4, pady=4, sticky="nswe")
+            ttk.Label(frm, text=label, font=("Segoe UI", 8),
+                      foreground="gray").pack(pady=(4, 0))
+            ttk.Label(frm, textvariable=var, font=("Segoe UI", 13, "bold"),
+                      width=6, anchor="center").pack()
+            ttk.Label(frm, text=unit, font=("Segoe UI", 8),
+                      foreground="gray").pack(pady=(0, 4))
+        card("Air temp", v["AirT_C"],  "°C",  0)
+        card("Humidity", v["RH"],      "%",   1)
+        card("Wind",     v["WS_ms"],   "m/s", 2)
+        card("Rain",     v["Rain_mm"], "mm",  3)
+
+        # ---- grouped detail (2×2 mini frames) ----
+        groups = [
+            ("Wind", [("Dir", "WindDir", "°"), ("Gust", "MaxWS_ms", "m/s"),
+                      ("Prev", "WSPrev", "m/s"), ("Invalid", "Invalid_Wind", "")]),
+            ("Solar / Light", [("SlrFD", "SlrFD_W", "W/m²"), ("SlrTF", "SlrTF_MJ", "MJ"),
+                               ("PPFD", "PPFD", "µmol")]),
+            ("Pressure / Tilt", [("BP", "BP_mbar", "mbar"), ("VP", "VP_mbar", "mbar"),
+                                 ("Tilt NS", "TiltNS_deg", "°"), ("Tilt WE", "TiltWE_deg", "°")]),
+            ("Soil (CS655)", [("VWC", "VWC", ""), ("EC", "EC", ""), ("Temp", "T", "°C"),
+                              ("PA", "PA", ""), ("VR", "VR", "")]),
+        ]
+        gf = ttk.Frame(wx)
+        gf.grid(row=2, column=0, columnspan=4, sticky="we", padx=4, pady=(2, 2))
+        for i, (title, items) in enumerate(groups):
+            lf = ttk.LabelFrame(gf, text=title)
+            lf.grid(row=i // 2, column=i % 2, sticky="nwe", padx=4, pady=4)
+            for r, (lbl, key, unit) in enumerate(items):
+                ttk.Label(lf, text=lbl, font=("Segoe UI", 8),
+                          foreground="gray").grid(row=r, column=0, sticky="w", padx=(6, 8), pady=1)
+                ttk.Label(lf, textvariable=v[key], font=("Segoe UI", 9, "bold")
+                          ).grid(row=r, column=1, sticky="e", padx=(0, 3), pady=1)
+                ttk.Label(lf, text=unit, font=("Segoe UI", 8),
+                          foreground="gray").grid(row=r, column=2, sticky="w", padx=(0, 6), pady=1)
+
+        # ---- last update ----
+        ttk.Label(wx, text="Last update:", font=("Segoe UI", 8)
+                  ).grid(row=3, column=0, sticky="e", padx=5, pady=(0, 6))
+        ttk.Label(wx, textvariable=self._wx_ts_var, font=("Segoe UI", 8),
+                  foreground="gray").grid(row=3, column=1, columnspan=3, sticky="w",
+                                          padx=2, pady=(0, 6))
 
     # ------------------------------------------------------------------ #
     #  Network Scanner Tab                                                 #
