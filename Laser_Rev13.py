@@ -928,9 +928,13 @@ class App(tk.Tk):
             row=2, column=0, columnspan=9, sticky="w", padx=10, pady=4
         )
 
+        # --- Right column: stack Rain + Temp&RH + Weather ชิดบน (ไม่มีช่องว่าง) ---
+        right_col = ttk.Frame(root)
+        right_col.grid(row=1, column=2, rowspan=3, sticky="new", padx=5, pady=5)
+
         # --- Rain Sensor status display in Main ---
-        rain_frm = ttk.LabelFrame(root, text="Rain Sensor")
-        rain_frm.grid(row=1, column=2, rowspan=1, sticky="nwe", padx=5, pady=5)
+        rain_frm = ttk.LabelFrame(right_col, text="Rain Sensor")
+        rain_frm.pack(fill="x", pady=(0, 6))
         self._ui_refs["rain_frame"] = rain_frm
 
         # Row 0: status + intensity + total
@@ -961,8 +965,8 @@ class App(tk.Tk):
         
 
         # --- Temp & RH Sensor display in Main (card-based layout) ---
-        sensor_frm = ttk.LabelFrame(root, text="Temp & RH Sensor")
-        sensor_frm.grid(row=2, column=2, sticky="nwe", padx=5, pady=5)
+        sensor_frm = ttk.LabelFrame(right_col, text="Temp & RH Sensor")
+        sensor_frm.pack(fill="x", pady=(0, 6))
         self._ui_refs["sensor_frame"] = sensor_frm
 
         # Section headers
@@ -1002,7 +1006,7 @@ class App(tk.Tk):
                   foreground="gray").grid(row=2, column=1, columnspan=6, sticky="w", padx=2, pady=(2,6))
 
         # --- Weather Station display in Main (card-based, same style) ---
-        self._build_weather_panel(root, row=3, column=2)
+        self._build_weather_panel(right_col)
 
         # Telemetry
         tele = ttk.LabelFrame(root, text="Telemetry – DTEMF / LTEMF")
@@ -1179,8 +1183,8 @@ class App(tk.Tk):
         # Responsive column weights: left panel | right panel | rain sensor
         # col0=left panel, col1=right panel (programs+logs), col2=sensors
         root.columnconfigure(0, weight=2, minsize=320)
-        root.columnconfigure(1, weight=5)
-        root.columnconfigure(2, weight=2, minsize=280)
+        root.columnconfigure(1, weight=4)
+        root.columnconfigure(2, weight=2, minsize=470)  # sensors + weather (ต้องกว้างพอ)
         root.rowconfigure(3, weight=1)  # vis/charts row expands
 
     # ------------------------------------------------------------------ #
@@ -1491,11 +1495,11 @@ class App(tk.Tk):
     # ------------------------------------------------------------------ #
     #  Weather Station panel (Main tab)                                    #
     # ------------------------------------------------------------------ #
-    def _build_weather_panel(self, root, row, column):
+    def _build_weather_panel(self, parent):
         """การ์ด Weather Station ในแท็บ Main — แสดงค่าจาก weather station
         (ทุกช่องเริ่มเป็น '-' รอต่อ API ภายหลัง — ใช้ self._wx_vars[...] อัปเดต)"""
-        wx = ttk.LabelFrame(root, text="Weather Station")
-        wx.grid(row=row, column=column, sticky="nwe", padx=5, pady=5)
+        wx = ttk.LabelFrame(parent, text="Weather Station")
+        wx.pack(fill="x", pady=(0, 6))
         self._ui_refs["weather_frame"] = wx
         v = self._wx_vars
 
