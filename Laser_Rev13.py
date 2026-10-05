@@ -4969,21 +4969,25 @@ class App(tk.Tk):
                 "programs": []
             }
             for v in self.programs:
-                item = {
-                    "name": v["name"].get().strip() if v.get("name") else "",
-                    "enabled": bool(v["enabled"].get()),
-                    "mode": v["mode"].get().lower(),  
-                    "start": v["start"].get(),
-                    "end": v["end"].get(),
-                    "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
-                    "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
-                    "times": v["times"].get(),
-                }
-                if item["mode"] == "once":
-                    item["once_date"] = v["once_date"].get()
-                elif item["mode"] == "selectday":
-                    item["dates"] = [d.isoformat() for d in sorted(v["sel_dates"])]
-                data["programs"].append(item)
+                try:
+                    item = {
+                        "name": v["name"].get().strip() if v.get("name") else "",
+                        "enabled": bool(v["enabled"].get()),
+                        "mode": v["mode"].get().lower(),
+                        "start": v["start"].get(),
+                        "end": v["end"].get(),
+                        "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
+                        "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
+                        "times": v["times"].get(),
+                    }
+                    if item["mode"] == "once":
+                        item["once_date"] = v["once_date"].get()
+                    elif item["mode"] == "selectday":
+                        item["dates"] = [d.isoformat() for d in sorted(v["sel_dates"])]
+                    data["programs"].append(item)
+                except Exception as e:
+                    # โปรแกรมที่มีค่าผิด (เช่น Fire/Rest ว่าง) — ข้าม ไม่ให้ save ทั้งก้อนล้ม
+                    self.log(f"ข้ามบันทึกโปรแกรมที่ค่าผิด: {e}")
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             self.log("บันทึกการตั้งค่าแล้ว")
@@ -5150,6 +5154,17 @@ class App(tk.Tk):
                 if isinstance(profiles, dict):
                     self._cs_profiles = profiles
                     self._cs_reload_profile_list()
+
+            # ---------- restore scheduled programs ----------
+            # (programs ถูก save ไว้แล้ว แต่เดิมไม่ได้โหลดกลับ → schedule หายหลังเปิดใหม่)
+            progs = data.get("programs", [])
+            if isinstance(progs, list) and progs:
+                for p in progs:
+                    try:
+                        self.add_program(p)
+                    except Exception as e:
+                        self.log(f"โหลดโปรแกรมล้มเหลว: {e}")
+                self._update_program_tab_titles()
 
         except Exception as e:
             self.log(f"โหลดค่า config เข้า UI ล้มเหลว: {e}")
