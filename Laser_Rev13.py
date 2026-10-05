@@ -2908,6 +2908,8 @@ class App(tk.Tk):
             "fire_ms": tk.StringVar(value="1"),   # minutes, supports M.SS (e.g., 2.30)
             "rest_ms": tk.StringVar(value="1"),
 
+            "times": tk.StringVar(value="48"),    # โหมด 24h: จำนวนครั้ง/วัน (คำนวณ Rest)
+
             "once_date": tk.StringVar(value=date.today().isoformat()),
             "sel_dates": set(),  # only select date (set of date)
             "edit_mode": tk.BooleanVar(value=True),
@@ -2928,6 +2930,7 @@ class App(tk.Tk):
             pv["end"].set(init_data.get("end", "16:50"))
             pv["fire_ms"].set(self._ms_to_minutes_text(int(init_data.get("fire_ms", 60000))))
             pv["rest_ms"].set(self._ms_to_minutes_text(int(init_data.get("rest_ms", 60000))))
+            pv["times"].set(str(init_data.get("times", 48)))
 
 
             pv["edit_mode"] = tk.BooleanVar(value=True)  # เริ่มต้นแก้ไขได้
@@ -2954,7 +2957,7 @@ class App(tk.Tk):
             textvariable=pv["mode"],
             width=16,
             state="readonly",
-            values=["everyday", "weekdays", "selectday", "once"]
+            values=["everyday", "weekdays", "selectday", "once", "24h"]
         )
 
         mode_cb.pack(side=tk.LEFT, padx=4)
@@ -3019,6 +3022,22 @@ class App(tk.Tk):
 
         pv["once_frm"] = once_frm
         pv["only_frm"] = only_frm
+
+        # 24h UI: จำนวนครั้ง/วัน → คำนวณ Rest ให้กระจายเต็ม 24 ชม.
+        h24_frm = ttk.Frame(date_area)
+        ttk.Label(h24_frm, text="Run 24h/day — Times/day:").pack(side=tk.LEFT)
+        pv["times_entry"] = ttk.Entry(h24_frm, textvariable=pv["times"], width=6)
+        pv["times_entry"].pack(side=tk.LEFT, padx=4)
+        pv["h24_rest_lbl"] = ttk.Label(h24_frm, text="", foreground="gray")
+        pv["h24_rest_lbl"].pack(side=tk.LEFT, padx=10)
+        pv["h24_frm"] = h24_frm
+
+        # อัปเดต Rest อัตโนมัติเมื่อแก้ Times/day หรือ Fire (เฉพาะโหมด 24h)
+        def _h24_trace(*_a, v=pv):
+            if v["mode"].get().lower() == "24h":
+                self._recompute_h24(v)
+        pv["times"].trace_add("write", _h24_trace)
+        pv["fire_ms"].trace_add("write", _h24_trace)
 
         # Row 3: preview + status + progress
         row2 = ttk.Frame(tab); row2.pack(fill=tk.X, pady=3)
@@ -3176,6 +3195,7 @@ class App(tk.Tk):
             "end": v["end"].get(),
             "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
             "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
+            "times": v["times"].get(),
         }
 
         if init_data["mode"] == "once":
@@ -3206,14 +3226,75 @@ class App(tk.Tk):
                 foreground="gray"
             ).pack(anchor="w")
 
+        elif mode == "24h":
+            # ยิงต่อเนื่อง 24 ชม. ทุกวัน — ตั้งจำนวนครั้ง/วัน + Fire, ระบบคำนวณ Rest
+            # Start/End/Rest ไม่ใช้ → ปิดไว้กันสับสน
+            for key in ("start_entry", "end_entry", "rest_entry"):
+                try:
+                    v[key].config(state="disabled")
+                except Exception:
+                    pass
+            v["h24_frm"].pack(fill=tk.X)
+            self._recompute_h24(v)
+
         elif mode == "once":
             v["once_frm"].pack(fill=tk.X)
-            
+
         else:  # selectday
             cnt = len(v["sel_dates"])
             v["dates_label"].config(text=f"({cnt})")
             v["only_frm"].pack(fill=tk.X)
+
+        if mode != "24h":
+            # กลับมาเปิดช่อง Start/End/Rest ตามสถานะแก้ไข
+            st = "normal" if v.get("edit_mode") and v["edit_mode"].get() else "disabled"
+            for key in ("start_entry", "end_entry", "rest_entry"):
+                try:
+                    v[key].config(state=st)
+                except Exception:
+                    pass
         
+    def _recompute_h24(self, v: dict):
+        """โหมด 24h: จาก Times/day + Fire → คำนวณ Rest ให้กระจายเต็ม 24 ชม.
+        เขียนผลลง v["rest_ms"] (ให้ runner ใช้ต่อได้เลย) และอัปเดต label.
+        คืน (ok: bool, msg: str)
+        """
+        lbl = v.get("h24_rest_lbl")
+        try:
+            n = int(float(str(v["times"].get()).strip()))
+        except Exception:
+            if lbl: lbl.config(text="Times/day ต้องเป็นตัวเลข", foreground="#b00")
+            return False, "Times/day ต้องเป็นตัวเลข"
+        if n <= 0:
+            if lbl: lbl.config(text="Times/day ต้อง > 0", foreground="#b00")
+            return False, "Times/day ต้องมากกว่า 0"
+        try:
+            fire_min = self._parse_minutes_text(v["fire_ms"].get())
+        except Exception as e:
+            if lbl: lbl.config(text=f"Fire ไม่ถูกต้อง: {e}", foreground="#b00")
+            return False, f"Fire ไม่ถูกต้อง: {e}"
+
+        cycle_min = 1440.0 / n            # 24 ชม. = 1440 นาที หารจำนวนครั้ง
+        rest_min = cycle_min - fire_min
+        if fire_min <= 0:
+            if lbl: lbl.config(text="Fire ต้อง > 0", foreground="#b00")
+            return False, "Fire ต้องมากกว่า 0"
+        if rest_min < 0:
+            if lbl:
+                lbl.config(text=f"Fire ยาวเกิน — รอบละ {cycle_min:.2f} นาที",
+                           foreground="#b00")
+            return False, (f"Fire ({fire_min:.2f} นาที) ยาวเกินรอบ "
+                           f"({cycle_min:.2f} นาที) สำหรับ {n} ครั้ง/วัน")
+
+        rest_ms = int(round(rest_min * 60000))
+        v["rest_ms"].set(self._ms_to_minutes_text(rest_ms))
+        if lbl:
+            lbl.config(
+                text=(f"→ รอบละ {cycle_min:.2f} นาที  (Fire {fire_min:g} + "
+                      f"Rest {self._ms_to_minutes_text(rest_ms)})"),
+                foreground="gray")
+        return True, ""
+
     def _ui_update_prog(self, idx: int, done: int, total: int, state: str):
         try:
             self.after(0, lambda: self._update_prog_ui(idx, done, total, state))
@@ -3994,9 +4075,17 @@ class App(tk.Tk):
         if idx < 0 or idx >= len(self.programs): return
         v = self.programs[idx]
         try:
-            start_dt = self._parse_hhmm_into(date.today(), v["start"].get())
-            end_dt = self._parse_hhmm_into(date.today(), v["end"].get())
-            if end_dt <= start_dt: end_dt += timedelta(days=1)
+            if v["mode"].get().lower() == "24h":
+                ok, msg = self._recompute_h24(v)
+                if not ok:
+                    messagebox.showerror("Invalid 24H", msg)
+                    return
+                start_dt = self._parse_hhmm_into(date.today(), "00:00")
+                end_dt = start_dt + timedelta(days=1)
+            else:
+                start_dt = self._parse_hhmm_into(date.today(), v["start"].get())
+                end_dt = self._parse_hhmm_into(date.today(), v["end"].get())
+                if end_dt <= start_dt: end_dt += timedelta(days=1)
             fire_td = timedelta(milliseconds=self._minutes_text_to_ms(v["fire_ms"].get()))
             rest_td = timedelta(milliseconds=self._minutes_text_to_ms(v["rest_ms"].get()))
             n = FireRestScheduler.count_fire_cycles(start_dt, end_dt, fire_td, rest_td)
@@ -4012,10 +4101,18 @@ class App(tk.Tk):
             return
         v = self.programs[idx]
         try:
-            start_dt = self._parse_hhmm_into(date.today(), v["start"].get())
-            end_dt = self._parse_hhmm_into(date.today(), v["end"].get())
-            if end_dt <= start_dt:
-                end_dt += timedelta(days=1)
+            if v["mode"].get().lower() == "24h":
+                ok, msg = self._recompute_h24(v)
+                if not ok:
+                    messagebox.showerror("Invalid 24H", msg)
+                    return
+                start_dt = self._parse_hhmm_into(date.today(), "00:00")
+                end_dt = start_dt + timedelta(days=1)
+            else:
+                start_dt = self._parse_hhmm_into(date.today(), v["start"].get())
+                end_dt = self._parse_hhmm_into(date.today(), v["end"].get())
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
 
             fire_td = timedelta(milliseconds=self._minutes_text_to_ms(v["fire_ms"].get()))
             rest_td = timedelta(milliseconds=self._minutes_text_to_ms(v["rest_ms"].get()))
@@ -4202,6 +4299,14 @@ class App(tk.Tk):
                 e += timedelta(days=1)
             return s, e
 
+        if mode == "24h":
+            # ยิงต่อเนื่องทั้งวันทุกวัน — หน้าต่าง = เที่ยงคืนวันนี้ → เที่ยงคืนวันถัดไป
+            # (วันต่อวันต่อเนื่องกันพอดี เพราะรอบหารเต็ม 1440 นาที)
+            today = now_dt.date()
+            s = self._parse_hhmm_into(today, "00:00")
+            e = s + timedelta(days=1)
+            return s, e
+
         if mode == "everyday":
             today = now_dt.date()
 
@@ -4298,13 +4403,24 @@ class App(tk.Tk):
         state = "normal" if editable else "disabled"
 
         # widget หลัก
-        for key in ("start_entry", "end_entry", "fire_entry", "rest_entry", "mode_cb", "name_entry"):
+        for key in ("start_entry", "end_entry", "fire_entry", "rest_entry",
+                    "mode_cb", "name_entry", "times_entry"):
             w = v.get(key)
             if w:
                 try:
                     w.config(state=state)
                 except Exception:
                     pass
+
+        # โหมด 24h: Start/End/Rest ไม่ใช้ → ปิดไว้เสมอแม้ตอนปลดล็อกแก้ไข
+        if editable and v.get("mode") and v["mode"].get().lower() == "24h":
+            for key in ("start_entry", "end_entry", "rest_entry"):
+                w = v.get(key)
+                if w:
+                    try:
+                        w.config(state="disabled")
+                    except Exception:
+                        pass
 
         # ปุ่ม/องค์ประกอบใน date_area (Once/Selectday)
         try:
@@ -4370,6 +4486,14 @@ class App(tk.Tk):
 
         # เคลียร์ของเก่า
         self.stop_program(idx)
+
+        # โหมด 24h: คำนวณ Rest จาก Times/day + Fire ก่อน (เขียนลง rest_ms)
+        if v["mode"].get().lower() == "24h":
+            ok, msg = self._recompute_h24(v)
+            if not ok:
+                messagebox.showerror("Invalid 24H", msg)
+                self._sched_log(idx, f"Start blocked (24H): {msg}")
+                return
 
         try:
             fire_ms = self._minutes_text_to_ms(v["fire_ms"].get())
@@ -4827,7 +4951,7 @@ class App(tk.Tk):
                     "end": v["end"].get(),
                     "fire_ms": self._minutes_text_to_ms(v["fire_ms"].get()),
                     "rest_ms": self._minutes_text_to_ms(v["rest_ms"].get()),
-
+                    "times": v["times"].get(),
                 }
                 if item["mode"] == "once":
                     item["once_date"] = v["once_date"].get()

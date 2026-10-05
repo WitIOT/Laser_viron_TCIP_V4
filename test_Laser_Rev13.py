@@ -700,3 +700,31 @@ class TestWeekdaysOvernight:
         now = datetime(2026, 10, 3, 9, 0, tzinfo=L.TZ)       # Saturday
         s, _ = app.compute_next_occurrence(0, now)
         assert s == datetime(2026, 10, 5, 8, 0, tzinfo=L.TZ)     # Monday
+
+
+# --------------------------------------------------------------------- #
+#  24H mode: continuous all-day window, N cycles/day (rest computed)
+# --------------------------------------------------------------------- #
+class Test24HMode:
+    def _app(self):
+        app = make_app()
+        app.programs = [{"mode": FakeVar("24h"),
+                         "start": FakeVar("16:30"), "end": FakeVar("16:50")}]
+        return app
+
+    def test_window_is_full_day_and_active(self):
+        from datetime import datetime, timedelta
+        app = self._app()
+        now = datetime(2026, 10, 5, 9, 14, tzinfo=L.TZ)
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 5, 0, 0, tzinfo=L.TZ)
+        assert e == s + timedelta(days=1)
+        assert s <= now < e
+
+    def test_48_cycles_fire5_rest25(self):
+        from datetime import datetime, timedelta
+        app = self._app()
+        s, e = app.compute_next_occurrence(0, datetime(2026, 10, 5, 9, 0, tzinfo=L.TZ))
+        n = L.FireRestScheduler.count_fire_cycles(
+            s, e, timedelta(minutes=5), timedelta(minutes=25))
+        assert n == 48
