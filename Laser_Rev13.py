@@ -4666,6 +4666,16 @@ class App(tk.Tk):
                     status_txt = f"Resting ({done}/{total})"
                     if is_last:
                         status_txt = f"Resting FINAL ({done}/{total})"
+                    else:
+                        # บอกเวลายิงรอบถัดไป (คำนวณจากเวลาจริง → แม่นแม้มีรอบถูกบล็อก)
+                        try:
+                            nf = self._next_fire_time(datetime.now(TZ), s_dt, e_dt,
+                                                      fire_ms, rest_ms)
+                            if nf is not None:
+                                status_txt = (f"Resting ({done}/{total}) — "
+                                              f"next fire {nf.strftime('%H:%M:%S')}")
+                        except Exception:
+                            pass
 
                     # self._update_prog_ui(idx, done, total, status_txt)
                     # self._append_status_point(0)
