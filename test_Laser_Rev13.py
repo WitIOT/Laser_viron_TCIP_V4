@@ -649,3 +649,54 @@ class TestOvernightSchedule:
         s, e = app.compute_next_occurrence(0, now)
         assert s == datetime(2026, 10, 4, 23, 55, tzinfo=L.TZ)
         assert s <= now < e
+
+
+# --------------------------------------------------------------------- #
+#  weekdays overnight: run if START or END day is a weekday (Option B)
+# --------------------------------------------------------------------- #
+class TestWeekdaysOvernight:
+    def _app(self, start, end):
+        app = make_app()
+        app.programs = [{"mode": FakeVar("weekdays"),
+                         "start": FakeVar(start), "end": FakeVar(end)}]
+        return app
+
+    def test_sunday_into_monday_is_active(self):
+        # เริ่มอาทิตย์ 23:55 จบจันทร์ 12:35 — จันทร์เช้าต้อง Active (จบวันทำงาน)
+        from datetime import datetime
+        app = self._app("23:55", "12:35")
+        now = datetime(2026, 10, 5, 9, 0, tzinfo=L.TZ)      # Monday
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 4, 23, 55, tzinfo=L.TZ)  # Sunday start
+        assert s <= now < e
+
+    def test_sunday_evening_waits_tonight(self):
+        from datetime import datetime
+        app = self._app("23:55", "12:35")
+        now = datetime(2026, 10, 4, 20, 0, tzinfo=L.TZ)      # Sunday evening
+        s, _ = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 4, 23, 55, tzinfo=L.TZ)
+
+    def test_friday_into_saturday_is_active(self):
+        from datetime import datetime
+        app = self._app("23:55", "12:35")
+        now = datetime(2026, 10, 10, 9, 0, tzinfo=L.TZ)      # Saturday
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 9, 23, 55, tzinfo=L.TZ)   # Friday start
+        assert s <= now < e
+
+    def test_saturday_afternoon_next_is_sunday_night(self):
+        # หลัง Fri->Sat จบแล้ว รอบถัดไปคืออาทิตย์คืน (จบวันจันทร์)
+        from datetime import datetime
+        app = self._app("23:55", "12:35")
+        now = datetime(2026, 10, 10, 13, 0, tzinfo=L.TZ)     # Saturday 13:00
+        s, _ = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 11, 23, 55, tzinfo=L.TZ)  # Sunday night
+
+    def test_pure_weekend_same_day_window_skipped(self):
+        # หน้าต่างในวันเดียวบนเสาร์ (เริ่ม+จบเสาร์) ต้องข้ามไปจันทร์
+        from datetime import datetime
+        app = self._app("08:00", "17:00")
+        now = datetime(2026, 10, 3, 9, 0, tzinfo=L.TZ)       # Saturday
+        s, _ = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 5, 8, 0, tzinfo=L.TZ)     # Monday

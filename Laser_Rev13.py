@@ -4236,31 +4236,38 @@ class App(tk.Tk):
             return None, None
 
         elif mode in ("weekdays", "weekday"):
-            d = now_dt.date()
+            # หน้าต่างใช้ได้ถ้า "วันเริ่ม" หรือ "วันจบ" เป็นวันทำงาน (จ.–ศ.)
+            # เช่น อาทิตย์ 23:55 → จันทร์ 12:35 ใช้ได้ (จบวันจันทร์)
+            def _win_valid(dd: date) -> bool:
+                ws, we = mk_se(dd)
+                return (dd.weekday() < 5) or (we.date().weekday() < 5)
 
-            # ตรวจหน้าต่างข้ามเที่ยงคืนที่เริ่มจาก "วันทำงานก่อนหน้า" และยังไม่จบ
-            prev = d - timedelta(days=1)
-            if prev.weekday() < 5:
+            today = now_dt.date()
+
+            # 1) หน้าต่างที่เริ่มเมื่อวาน ข้ามเที่ยงคืนมา และยังไม่จบ
+            prev = today - timedelta(days=1)
+            if _win_valid(prev):
                 s_prev, e_prev = mk_se(prev)
                 if s_prev <= now_dt < e_prev:
                     return s_prev, e_prev
 
-            # ถ้าวันนี้เป็น เสาร์/อาทิตย์ ให้เลื่อนไปวันจันทร์ถัดไป
-            while d.weekday() >= 5:
-                d += timedelta(days=1)
+            # 2) หน้าต่างของวันนี้ (ถ้าใช้ได้)
+            if _win_valid(today):
+                s, e = mk_se(today)
+                if now_dt < s:
+                    return s, e
+                if s <= now_dt < e:
+                    return s, e
 
-            s, e = mk_se(d)
-
-            if now_dt < s:
-                return s, e
-            elif s <= now_dt < e:
-                return s, e
-            else:
-                # ไปวันทำงานถัดไป
+            # 3) หาวันเริ่มถัดไปที่ใช้ได้ (เริ่มหลังเวลาปัจจุบัน)
+            d = today
+            for _ in range(14):
                 d += timedelta(days=1)
-                while d.weekday() >= 5:
-                    d += timedelta(days=1)
-                return mk_se(d)
+                if _win_valid(d):
+                    s, e = mk_se(d)
+                    if s > now_dt:
+                        return s, e
+            return None, None
 
 
         else:  # selectday
