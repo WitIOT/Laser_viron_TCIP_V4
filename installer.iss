@@ -8,7 +8,7 @@
 
 #define MyAppName "Laser Control"
 #define MyAppExeName "LaserControl.exe"
-#define MyAppVersion "13.0.7"
+#define MyAppVersion "13.0.8"
 #define MyAppPublisher "NARIT"
 
 [Setup]
