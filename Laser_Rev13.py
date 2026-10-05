@@ -4204,8 +4204,14 @@ class App(tk.Tk):
 
         if mode == "everyday":
             today = now_dt.date()
-            s, e = mk_se(today)
 
+            # ตรวจหน้าต่างที่ "เริ่มเมื่อวาน" ก่อน — กรณีข้ามเที่ยงคืนแล้วยังอยู่ในช่วง
+            # (เช่น เริ่ม 23:55 ของเมื่อวาน จบ 12:40 ของวันนี้) → ต้อง Active ทันที
+            s_prev, e_prev = mk_se(today - timedelta(days=1))
+            if s_prev <= now_dt < e_prev:
+                return s_prev, e_prev
+
+            s, e = mk_se(today)
             if now_dt < s:
                 # ยังไม่ถึงเวลาเริ่มของวันนี้ → รอวันนี้
                 return s, e
@@ -4232,6 +4238,13 @@ class App(tk.Tk):
         elif mode in ("weekdays", "weekday"):
             d = now_dt.date()
 
+            # ตรวจหน้าต่างข้ามเที่ยงคืนที่เริ่มจาก "วันทำงานก่อนหน้า" และยังไม่จบ
+            prev = d - timedelta(days=1)
+            if prev.weekday() < 5:
+                s_prev, e_prev = mk_se(prev)
+                if s_prev <= now_dt < e_prev:
+                    return s_prev, e_prev
+
             # ถ้าวันนี้เป็น เสาร์/อาทิตย์ ให้เลื่อนไปวันจันทร์ถัดไป
             while d.weekday() >= 5:
                 d += timedelta(days=1)
@@ -4254,8 +4267,15 @@ class App(tk.Tk):
             if not v["sel_dates"]:
                 return None, None
 
-            # ถ้าวันนี้ถูกเลือก และตอนนี้อยู่ในหน้าต่างเวลา → เริ่มต่อได้ทันที
+            # หน้าต่างข้ามเที่ยงคืนที่เริ่มจาก "วันที่เลือกเมื่อวาน" และยังไม่จบ
             today = now_dt.date()
+            prev = today - timedelta(days=1)
+            if prev in v["sel_dates"]:
+                s_prev, e_prev = mk_se(prev)
+                if s_prev <= now_dt < e_prev:
+                    return s_prev, e_prev
+
+            # ถ้าวันนี้ถูกเลือก และตอนนี้อยู่ในหน้าต่างเวลา → เริ่มต่อได้ทันที
             if today in v["sel_dates"]:
                 s, e = mk_se(today)
                 if s <= now_dt < e:

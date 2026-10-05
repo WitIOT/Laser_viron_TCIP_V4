@@ -596,3 +596,56 @@ class TestRoofNaGracePeriod:
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --------------------------------------------------------------------- #
+#  Overnight schedule (start > end, crosses midnight) next-occurrence
+# --------------------------------------------------------------------- #
+class TestOvernightSchedule:
+    def _app(self, start, end, mode="everyday", sel=None):
+        app = make_app()
+        prog = {"mode": FakeVar(mode), "start": FakeVar(start), "end": FakeVar(end)}
+        if sel is not None:
+            prog["sel_dates"] = sel
+        app.programs = [prog]
+        return app
+
+    def test_overnight_active_next_morning(self):
+        from datetime import datetime
+        app = self._app("23:55", "12:40")
+        now = datetime(2026, 10, 5, 9, 14, tzinfo=L.TZ)
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 4, 23, 55, tzinfo=L.TZ)
+        assert e == datetime(2026, 10, 5, 12, 40, tzinfo=L.TZ)
+        assert s <= now < e           # ต้องถือว่า Active ทันที
+
+    def test_overnight_after_end_waits_tonight(self):
+        from datetime import datetime
+        app = self._app("23:55", "12:40")
+        now = datetime(2026, 10, 5, 13, 0, tzinfo=L.TZ)
+        s, _ = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 5, 23, 55, tzinfo=L.TZ)
+
+    def test_overnight_evening_before_start_waits_tonight(self):
+        from datetime import datetime
+        app = self._app("23:55", "12:40")
+        now = datetime(2026, 10, 5, 20, 0, tzinfo=L.TZ)
+        s, _ = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 5, 23, 55, tzinfo=L.TZ)
+
+    def test_same_day_window_unaffected(self):
+        from datetime import datetime
+        app = self._app("08:00", "17:00")
+        now = datetime(2026, 10, 5, 9, 0, tzinfo=L.TZ)
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 5, 8, 0, tzinfo=L.TZ)
+        assert s <= now < e
+
+    def test_selectday_overnight_active_next_morning(self):
+        from datetime import datetime, date
+        app = self._app("23:55", "12:40", mode="selectday",
+                        sel={date(2026, 10, 4)})
+        now = datetime(2026, 10, 5, 9, 14, tzinfo=L.TZ)
+        s, e = app.compute_next_occurrence(0, now)
+        assert s == datetime(2026, 10, 4, 23, 55, tzinfo=L.TZ)
+        assert s <= now < e
