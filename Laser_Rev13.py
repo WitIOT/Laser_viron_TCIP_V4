@@ -797,6 +797,11 @@ class App(tk.Tk):
         จะทำให้ process ไม่ปิดสนิท exe ยังถูกล็อก robocopy เขียนทับไม่ได้
         (สาเหตุที่อัปเดต 13.0.1→13.0.2 แล้ว exe ไม่เปลี่ยน)
         """
+        # บันทึกค่าทั้งหมดก่อนปิดเพื่ออัปเดต
+        try:
+            self.save_config()
+        except Exception:
+            pass
         try:
             self._roof_poll_stop = True
             self._rain_poll_stop = True
@@ -5480,6 +5485,14 @@ class App(tk.Tk):
                 except Exception: pass
 
     def on_close(self):
+        # บันทึกค่าทั้งหมดอัตโนมัติก่อนปิด (รวม Scheduled Programs)
+        try:
+            self.save_config()
+        except Exception as e:
+            try:
+                self.log(f"auto-save ตอนปิดล้มเหลว: {e}")
+            except Exception:
+                pass
         try:
             self._roof_poll_stop = True
             self._rain_poll_stop = True
