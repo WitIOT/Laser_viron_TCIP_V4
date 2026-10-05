@@ -4538,9 +4538,23 @@ class App(tk.Tk):
                 if s_dt <= now_dt < e_dt:
                     aligned = self._next_fire_time(now_dt, s_dt, e_dt, fire_ms, rest_ms)
                     if aligned is None:
-                        self._sched_log(idx, "No remaining fire time in the current window")
-                        break
-                    s_dt = aligned
+                        mode_now0 = v["mode"].get().lower()
+                        if mode_now0 == "once":
+                            # Once → ไม่มีรอบยิงเหลือ จบโปรแกรม
+                            self._sched_log(idx, "No remaining fire time in the current window")
+                            break
+                        # โหมดวนรอบ → ข้ามช่วงท้ายที่ไม่มีรอบยิง ไปหน้าต่างถัดไป
+                        self._sched_log(idx, "ไม่มีรอบยิงเหลือในหน้าต่างนี้ → ข้ามไปหน้าต่างถัดไป")
+                        s_dt, e_dt = self.compute_next_occurrence(idx, e_dt)
+                        if not s_dt:
+                            break
+                        now_dt = datetime.now(TZ)
+                        if s_dt <= now_dt < e_dt:
+                            a2 = self._next_fire_time(now_dt, s_dt, e_dt, fire_ms, rest_ms)
+                            if a2 is not None:
+                                s_dt = a2
+                    else:
+                        s_dt = aligned
 
                 try:
                     self._schedule_prefire_api(idx, s_dt)
@@ -4733,9 +4747,9 @@ class App(tk.Tk):
                 # เตรียมตัวแปรสำหรับดูว่ามีรอบถัดไปไหม
                 next_s = None
 
-                # ถ้าเป็นโหมดที่มีรอบหลายวัน (everyday หรือ select day) และยังไม่ถูกสั่งหยุด → คำนวณรอบถัดไป
-                # if not v["manager_stop"].is_set() and mode_now in ("everyday", "select day"):
-                if not v["manager_stop"].is_set() and mode_now in ("everyday", "weekdays", "selectday"):
+                # ถ้าเป็นโหมดที่มีรอบหลายวัน และยังไม่ถูกสั่งหยุด → คำนวณรอบถัดไป
+                # (24h ต้องอยู่ในลิสต์นี้ด้วย ไม่งั้นจะหยุดหลังจบวันแรก)
+                if not v["manager_stop"].is_set() and mode_now in ("everyday", "weekdays", "selectday", "24h"):
                     try:
                         next_s, _ = self.compute_next_occurrence(idx, datetime.now(TZ))
                     except Exception as e:
@@ -4746,8 +4760,10 @@ class App(tk.Tk):
                         # ข้อความหน้า UI ให้ต่างกันเล็กน้อย
                         if mode_now == "everyday":
                             state_txt = f"Done (next run {next_s.strftime('%Y-%m-%d %H:%M')})"
-                        else:  # select day
-                            state_txt = f"Done (next selected day {next_s.strftime('%Y-%m-%d %H:%M')})"
+                        elif mode_now == "24h":
+                            state_txt = "Running 24h (continuous)"
+                        else:  # weekdays / select day
+                            state_txt = f"Done (next run {next_s.strftime('%Y-%m-%d %H:%M')})"
                     else:
                         state_txt = "Done"
                 else:
