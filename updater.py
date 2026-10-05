@@ -255,7 +255,8 @@ if errorlevel 1 (
 )
 echo exe unlocked after %tries% tries >> %LOG%
 
-robocopy "{src_dir}" "{install_dir}" /E /IS /IT /R:30 /W:1 /NFL /NDL /NJH >> %LOG% 2>&1
+rem /XD: ห้ามแตะ setting/ และ logs/ ของผู้ใช้ (กันค่าที่ตั้งไว้/ล็อกโดนทับตอนอัปเดต)
+robocopy "{src_dir}" "{install_dir}" /E /IS /IT /R:30 /W:1 /NFL /NDL /NJH /XD setting logs >> %LOG% 2>&1
 if errorlevel 8 (
     echo ERROR: robocopy failed errorlevel %errorlevel% >> %LOG%
     goto fail
