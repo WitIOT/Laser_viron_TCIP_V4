@@ -654,8 +654,7 @@ class App(tk.Tk):
         self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
         self.datalog_dir       = ""         # ว่าง = ใช้ Logs directory เดียวกับระบบ
         self._datalog_stop     = threading.Event()
-        self._datalog_wake     = threading.Event()   # ปลุก worker ทันที (เปิดกลับ/ปิดโปรแกรม)
-        self._datalog_thread   = None
+        self._datalog_after_id = None       # id ของ after() ลูปบันทึก
         self._datalog_fh       = None       # file handle ที่ถือล็อกไว้
         self._datalog_path     = None
         self._datalog_cur_date = None       # ISO date ของไฟล์ที่เปิดอยู่
@@ -876,7 +875,6 @@ class App(tk.Tk):
             self.stop_all_programs()
             self._stop_telemetry()
             self._datalog_stop.set()
-            self._datalog_wake.set()
             self._datalog_close()
             if self.laser:
                 self.laser.close()
@@ -3823,22 +3821,19 @@ class App(tk.Tk):
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, f"datalog_{datetime.now(TZ).strftime('%Y%m%d')}.csv")
 
-    def _build_logger_row(self) -> list:
-        """สร้างแถวข้อมูล 1 แถว (คอลัมน์ตาม DATALOG_HEADER)"""
+    def _build_logger_row(self, d=None, l=None) -> list:
+        """สร้างแถวข้อมูล 1 แถว (คอลัมน์ตาม DATALOG_HEADER)
+        ต้องเรียกบน main thread (อ่าน Tk variables) — ค่า DTEMF/LTEMF (d,l)
+        ให้ query มาจาก worker ก่อนแล้วส่งเข้ามา (เลี่ยง block UI)"""
         now = datetime.now(TZ)
         connected = bool(self.laser)
         with self.manual_lock:
             status_num = 1 if self.is_firing else 0
-        qs = (self.qsdelay_live_var.get().strip()
-              if hasattr(self, "qsdelay_live_var") else self.qsdelay_var.get().strip())
-
-        d = l = None
-        if connected:
-            try:
-                d = self._query_float_quiet("$DTEMF ?")
-                l = self._query_float_quiet("$LTEMF ?")
-            except Exception:
-                d = l = None
+        try:
+            qs = (self.qsdelay_live_var.get().strip()
+                  if hasattr(self, "qsdelay_live_var") else self.qsdelay_var.get().strip())
+        except Exception:
+            qs = ""
 
         try:    maxv = float(self.max_temp_var.get())
         except Exception: maxv = None
@@ -3908,43 +3903,64 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def _datalog_worker(self):
-        while not self._datalog_stop.is_set():
-            try:
-                if getattr(self, "datalog_enabled", True):
-                    self._datalog_ensure_file()
-                    if self._datalog_fh is not None:
-                        csv.writer(self._datalog_fh).writerow(self._build_logger_row())
-                        self._datalog_fh.flush()
-                        # แจ้งเตือนหน้า Main ว่าบันทึกแล้ว (indicator เล็ก ไม่รบกวน)
-                        _hhmmss = datetime.now(TZ).strftime("%H:%M:%S")
-                        _fn = os.path.basename(self._datalog_path or "")
+    def _datalog_tick(self):
+        """รอบบันทึกหนึ่งครั้ง — ทำงานบน main thread (ปลอดภัยกับ Tk)
+        query DTEMF/LTEMF ใน worker สั้นๆ (ไม่ block UI) แล้วค่อยเขียนไฟล์"""
+        if self._datalog_stop.is_set():
+            return
+        try:
+            if getattr(self, "datalog_enabled", True):
+                if self.laser:
+                    # query เลเซอร์นอก main thread แล้วค่อยเขียน (เลี่ยง block UI)
+                    def _q():
+                        d = l = None
                         try:
-                            self.after(0, lambda t=_hhmmss, f=_fn:
-                                       self._datalog_flash(t, f))
+                            d = self._query_float_quiet("$DTEMF ?")
+                            l = self._query_float_quiet("$LTEMF ?")
                         except Exception:
                             pass
+                        try:
+                            self.after(0, lambda: self._datalog_write(d, l))
+                        except Exception:
+                            pass
+                    threading.Thread(target=_q, daemon=True, name="DataLogQuery").start()
                 else:
-                    # ปิดอยู่ → ปล่อยล็อกไฟล์ (ให้คนอื่นแก้ได้)
-                    self._datalog_close()
-            except Exception as e:
-                now_ts = time.monotonic()
-                if now_ts - self._datalog_fail_ts >= 60.0:
-                    self._datalog_fail_ts = now_ts
-                    self.log(f"Data logger error: {e} (suppress ถัดไป 60s)")
-                self._datalog_close()             # ปล่อย handle ให้ลองเปิดใหม่รอบหน้า
-            # รอ interval — ตื่นทันทีเมื่อ wake (เปิดกลับ) หรือ stop (ปิดโปรแกรม)
-            self._datalog_wake.wait(max(5, int(getattr(self, "datalog_interval", 300))))
-            self._datalog_wake.clear()
+                    self._datalog_write(None, None)
+            else:
+                self._datalog_close()
+        except Exception as e:
+            now_ts = time.monotonic()
+            if now_ts - self._datalog_fail_ts >= 60.0:
+                self._datalog_fail_ts = now_ts
+                self.log(f"Data logger tick error: {e} (suppress ถัดไป 60s)")
+        finally:
+            if not self._datalog_stop.is_set():
+                interval_ms = max(5, int(getattr(self, "datalog_interval", 300))) * 1000
+                self._datalog_after_id = self.after(interval_ms, self._datalog_tick)
+
+    def _datalog_write(self, d, l):
+        """เขียน 1 แถวลงไฟล์ (เรียกบน main thread เท่านั้น)"""
+        if not getattr(self, "datalog_enabled", True) or self._datalog_stop.is_set():
+            return
+        try:
+            self._datalog_ensure_file()
+            if self._datalog_fh is not None:
+                csv.writer(self._datalog_fh).writerow(self._build_logger_row(d, l))
+                self._datalog_fh.flush()
+                self._datalog_flash(datetime.now(TZ).strftime("%H:%M:%S"),
+                                    os.path.basename(self._datalog_path or ""))
+        except Exception as e:
+            now_ts = time.monotonic()
+            if now_ts - self._datalog_fail_ts >= 60.0:
+                self._datalog_fail_ts = now_ts
+                self.log(f"Data logger error: {e} (suppress ถัดไป 60s)")
+            self._datalog_close()                 # ปล่อย handle ให้ลองเปิดใหม่รอบหน้า
 
     def _start_datalog(self):
-        """เริ่ม thread ของ data logger (เรียกครั้งเดียวตอนเปิดแอป)"""
-        if self._datalog_thread is not None and self._datalog_thread.is_alive():
-            return
+        """เริ่มลูปบันทึก (after-based) — เรียกครั้งเดียวตอนเปิดแอป"""
         self._datalog_stop.clear()
-        self._datalog_thread = threading.Thread(
-            target=self._datalog_worker, daemon=True, name="DataLogger")
-        self._datalog_thread.start()
+        if self._datalog_after_id is None:
+            self._datalog_after_id = self.after(100, self._datalog_tick)
         if not self.datalog_enabled:
             self._datalog_status_var.set("Disabled")
 
@@ -3956,10 +3972,14 @@ class App(tk.Tk):
         except Exception:
             pass
         if self.datalog_enabled:
-            self._start_datalog()
-            self._datalog_wake.set()          # ปลุก worker ให้เปิด+ล็อกไฟล์ทันที
+            self._datalog_stop.clear()
+            # ยกเลิก tick ที่ค้าง แล้วรันทันที (เปิด+ล็อกไฟล์เดี๋ยวนี้) — กันลูปซ้อน
+            if self._datalog_after_id is not None:
+                try: self.after_cancel(self._datalog_after_id)
+                except Exception: pass
+                self._datalog_after_id = None
+            self._datalog_tick()
             self.log("Data logger: ENABLED")
-            self._datalog_status_var.set("Starting…")
             self._datalog_last_var.set("Data Logger: on (waiting…)")
         else:
             self._datalog_close()
@@ -5824,9 +5844,8 @@ class App(tk.Tk):
                 self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
-            # หยุด data logger + ปล่อยล็อกไฟล์ (ปลุก worker ให้ออกจาก sleep ทันที)
+            # หยุด data logger + ปล่อยล็อกไฟล์
             self._datalog_stop.set()
-            self._datalog_wake.set()
             self._datalog_close()
             if self.laser: self.laser.close()
         except Exception:
