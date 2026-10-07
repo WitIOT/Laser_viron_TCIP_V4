@@ -3877,8 +3877,7 @@ class App(tk.Tk):
         if self._datalog_fh is not None and self._datalog_cur_date == today:
             return
         self._datalog_close()                     # ปิดไฟล์วันก่อน (ถ้ามี)
-        path = self._datalog_path_for_today()
-        need_header = (not os.path.exists(path)) or os.path.getsize(path) == 0
+        path, need_header = self._datalog_pick_file()
         self._datalog_fh = open_write_locked_append(path)
         self._datalog_path = path
         self._datalog_cur_date = today
@@ -3891,6 +3890,34 @@ class App(tk.Tk):
         except Exception:
             pass
         self.log(f"Data logger → {path} (locked)")
+
+    @staticmethod
+    def _datalog_header_matches(path: str) -> bool:
+        """True ถ้าบรรทัดแรกของไฟล์ = DATALOG_HEADER ปัจจุบัน (คอลัมน์ตรงกัน)"""
+        try:
+            with open(path, "r", newline="", encoding="utf-8") as f:
+                first = next(csv.reader(f), [])
+            return first == DATALOG_HEADER
+        except Exception:
+            return False
+
+    def _datalog_pick_file(self):
+        """เลือกไฟล์ของวันนี้ที่คอลัมน์ตรงรูปแบบปัจจุบัน
+        - ไฟล์ใหม่/ว่าง → ใช้เลย (ต้องเขียน header)
+        - มีอยู่+header ตรง → append ต่อ (ไม่เขียน header)
+        - มีอยู่แต่ header ไม่ตรง (เช่น ไฟล์เก่าไม่มีคอลัมน์ WX) → เลื่อนไป _2, _3, ...
+        คืน (path, need_header)
+        """
+        base = self._datalog_path_for_today()        # .../datalog_YYYYMMDD.csv
+        root, ext = os.path.splitext(base)
+        candidates = [base] + [f"{root}_{n}{ext}" for n in range(2, 100)]
+        for path in candidates:
+            if (not os.path.exists(path)) or os.path.getsize(path) == 0:
+                return path, True                    # ไฟล์ใหม่ → เขียน header
+            if self._datalog_header_matches(path):
+                return path, False                   # header ตรง → เขียนต่อ
+            # header ไม่ตรง → ลองไฟล์ถัดไป (กันเหลื่อมคอลัมน์)
+        return base, True
 
     def _datalog_close(self):
         fh = self._datalog_fh
