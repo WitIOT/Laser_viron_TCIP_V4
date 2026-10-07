@@ -145,12 +145,25 @@ if not os.path.exists(CONFIG_FILE):
 DEFAULT_LASER_PORT = 2323
 
 # ---------------- Data Logger (continuous CSV) ----------------
-# คอลัมน์แบบเดียวกับ Telemetry + คอลัมน์ "Laser" (สถานะเชื่อมต่อ)
+# ฟิลด์จาก Weather Station (ลำดับคอลัมน์ในไฟล์ log) — ใช้ร่วมกับการ์ดหน้า Main
+WEATHER_FIELDS = [
+    "RecNum", "TimeStamp", "BattV", "PTemp_C",
+    "AirT_C", "RH", "RHT_C", "VP_mbar", "BP_mbar",
+    "WS_ms", "WindDir", "MaxWS_ms", "WSPrev", "WindDirPrev",
+    "MaxWSprev", "Invalid_Wind",
+    "Rain_mm", "Strikes", "Dist_km",
+    "SlrFD_W", "SlrTF_MJ", "PPFD",
+    "TiltNS_deg", "TiltWE_deg",
+    "VWC", "EC", "T", "P", "PA", "VR",
+]
+
+# คอลัมน์แบบเดียวกับ Telemetry + "Laser" (สถานะเชื่อมต่อ) + Weather Station (prefix WX_)
+# หมายเหตุ: คอลัมน์ WX_* จะว่างจนกว่าจะต่อ API Weather Station (ค่าอ่านจาก self._wx_vars)
 DATALOG_HEADER = [
     "Date", "Time", "Timezone", "Laser",
     "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS",
     "In_Temp(C)", "In_RH(%)", "Out_Temp(C)", "Out_RH(%)",
-]
+] + ["WX_" + f for f in WEATHER_FIELDS]
 
 
 def open_write_locked_append(path: str):
@@ -631,16 +644,7 @@ class App(tk.Tk):
         self._sensor_out_dew   = 0.0
 
         # --- Weather Station UI variables (ทุก field เริ่มเป็น "-" รอต่อ API ภายหลัง) ---
-        self._WX_FIELDS = [
-            "RecNum", "TimeStamp", "BattV", "PTemp_C",
-            "AirT_C", "RH", "RHT_C", "VP_mbar", "BP_mbar",
-            "WS_ms", "WindDir", "MaxWS_ms", "WSPrev", "WindDirPrev",
-            "MaxWSprev", "Invalid_Wind",
-            "Rain_mm", "Strikes", "Dist_km",
-            "SlrFD_W", "SlrTF_MJ", "PPFD",
-            "TiltNS_deg", "TiltWE_deg",
-            "VWC", "EC", "T", "P", "PA", "VR",
-        ]
+        self._WX_FIELDS = WEATHER_FIELDS   # ใช้รายการเดียวกับ Data Logger (sync คอลัมน์)
         self._wx_vars       = {k: tk.StringVar(value="-") for k in self._WX_FIELDS}
         self._wx_status_var = tk.StringVar(value="Offline")
         self._wx_ts_var     = tk.StringVar(value="-")
@@ -3847,6 +3851,17 @@ class App(tk.Tk):
         roof_state = self._get_roof_status_cached()
         in_t, in_rh, out_t, out_rh = self._sensor_csv_values()
 
+        # ค่าจาก Weather Station — อ่านจาก self._wx_vars (ว่าง "-" จนกว่าจะต่อ API)
+        # เมื่อฟังก์ชันรับค่าจาก API ตั้งค่า self._wx_vars[...].set(...) แล้ว
+        # คอลัมน์ WX_* จะถูกบันทึกให้อัตโนมัติโดยไม่ต้องแก้ตรงนี้
+        wx_vals = []
+        for f in WEATHER_FIELDS:
+            try:
+                v = str(self._wx_vars[f].get()).strip()
+            except Exception:
+                v = ""
+            wx_vals.append("" if v in ("", "-") else v)
+
         return [
             now.strftime("%Y-%m-%d"),
             now.strftime("%H:%M:%S"),
@@ -3857,7 +3872,7 @@ class App(tk.Tk):
             l if l is not None else "",
             overload, roof_state,
             in_t, in_rh, out_t, out_rh,
-        ]
+        ] + wx_vals
 
     def _datalog_ensure_file(self):
         """เปิดไฟล์ของวันนี้ (หมุนไฟล์เมื่อข้ามวัน) พร้อมเขียน header ถ้าไฟล์ใหม่"""
