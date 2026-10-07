@@ -654,6 +654,7 @@ class App(tk.Tk):
         self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
         self.datalog_dir       = ""         # ว่าง = ใช้ Logs directory เดียวกับระบบ
         self._datalog_stop     = threading.Event()
+        self._datalog_wake     = threading.Event()   # ปลุก worker ทันที (เปิดกลับ/ปิดโปรแกรม)
         self._datalog_thread   = None
         self._datalog_fh       = None       # file handle ที่ถือล็อกไว้
         self._datalog_path     = None
@@ -875,6 +876,7 @@ class App(tk.Tk):
             self.stop_all_programs()
             self._stop_telemetry()
             self._datalog_stop.set()
+            self._datalog_wake.set()
             self._datalog_close()
             if self.laser:
                 self.laser.close()
@@ -3922,14 +3924,18 @@ class App(tk.Tk):
                                        self._datalog_flash(t, f))
                         except Exception:
                             pass
+                else:
+                    # ปิดอยู่ → ปล่อยล็อกไฟล์ (ให้คนอื่นแก้ได้)
+                    self._datalog_close()
             except Exception as e:
                 now_ts = time.monotonic()
                 if now_ts - self._datalog_fail_ts >= 60.0:
                     self._datalog_fail_ts = now_ts
                     self.log(f"Data logger error: {e} (suppress ถัดไป 60s)")
                 self._datalog_close()             # ปล่อย handle ให้ลองเปิดใหม่รอบหน้า
-            # รอ interval (หยุดได้ทันทีเมื่อสั่ง stop)
-            self._datalog_stop.wait(max(5, int(getattr(self, "datalog_interval", 300))))
+            # รอ interval — ตื่นทันทีเมื่อ wake (เปิดกลับ) หรือ stop (ปิดโปรแกรม)
+            self._datalog_wake.wait(max(5, int(getattr(self, "datalog_interval", 300))))
+            self._datalog_wake.clear()
 
     def _start_datalog(self):
         """เริ่ม thread ของ data logger (เรียกครั้งเดียวตอนเปิดแอป)"""
@@ -3951,6 +3957,7 @@ class App(tk.Tk):
             pass
         if self.datalog_enabled:
             self._start_datalog()
+            self._datalog_wake.set()          # ปลุก worker ให้เปิด+ล็อกไฟล์ทันที
             self.log("Data logger: ENABLED")
             self._datalog_status_var.set("Starting…")
             self._datalog_last_var.set("Data Logger: on (waiting…)")
@@ -5817,8 +5824,9 @@ class App(tk.Tk):
                 self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
-            # หยุด data logger + ปล่อยล็อกไฟล์
+            # หยุด data logger + ปล่อยล็อกไฟล์ (ปลุก worker ให้ออกจาก sleep ทันที)
             self._datalog_stop.set()
+            self._datalog_wake.set()
             self._datalog_close()
             if self.laser: self.laser.close()
         except Exception:
