@@ -648,6 +648,7 @@ class App(tk.Tk):
         # --- Data Logger (CSV ต่อเนื่อง วันละ 1 ไฟล์ ล็อกไม่ให้คนอื่นแก้) ---
         self.datalog_enabled   = True
         self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
+        self.datalog_dir       = ""         # ว่าง = ใช้ Logs directory เดียวกับระบบ
         self._datalog_stop     = threading.Event()
         self._datalog_thread   = None
         self._datalog_fh       = None       # file handle ที่ถือล็อกไว้
@@ -656,7 +657,9 @@ class App(tk.Tk):
         self._datalog_fail_ts  = 0.0        # cooldown log error เปิดไฟล์ไม่ได้
         self.datalog_enabled_var  = tk.BooleanVar(value=self.datalog_enabled)
         self.datalog_interval_var = tk.IntVar(value=self.datalog_interval)
+        self.datalog_dir_var      = tk.StringVar(value=self.datalog_dir)
         self._datalog_status_var  = tk.StringVar(value="-")
+        self._datalog_last_var    = tk.StringVar(value="Data Logger: starting…")  # indicator หน้า Main
 
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
         self.rain_api_url_var      = tk.StringVar(value=self.rain_api_url)
@@ -1227,6 +1230,14 @@ class App(tk.Tk):
         vis.add(self.plot_frame, weight=3); vis.add(logs_container, weight=2)
         self._ui_refs["charts_frame"] = self.plot_frame
         self._ui_refs["logs_frame"] = logs_container
+
+        # Data Logger indicator — แถบบางล่างสุดของกรอบ Logs (ไม่รบกวน layout หลัก)
+        dlog_bar = ttk.Frame(logs_container)
+        dlog_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 2))
+        self._datalog_main_lbl = ttk.Label(dlog_bar, textvariable=self._datalog_last_var,
+                                           font=("Segoe UI", 8), foreground="gray")
+        self._datalog_main_lbl.pack(side=tk.LEFT, padx=4)
+
         nb = ttk.Notebook(logs_container); nb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         tab_all = ttk.Frame(nb); nb.add(tab_all, text="All except Schedule")
@@ -1497,21 +1508,37 @@ class App(tk.Tk):
                         command=_toggle_datalog
                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(6, 2))
 
-        ttk.Label(dlog_lf, text="Log interval (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(dlog_lf, textvariable=self.datalog_interval_var, width=8).grid(
-            row=1, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(dlog_lf, text="ความถี่บันทึก (ค่าเริ่มต้น 300 = 5 นาที)",
-                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
+        ttk.Label(dlog_lf, text="Log directory").grid(row=1, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(dlog_lf, textvariable=self.datalog_dir_var, width=48).grid(
+            row=1, column=1, sticky="we", padx=4, pady=5)
 
-        ttk.Label(dlog_lf, text="Status:").grid(row=2, column=0, sticky="w", padx=6, pady=(0, 6))
+        def _browse_datalog_dir():
+            try:
+                d = filedialog.askdirectory(title="Select Data Logger directory")
+                if d:
+                    self.datalog_dir_var.set(d)
+            except Exception:
+                pass
+        ttk.Button(dlog_lf, text="Browse", command=_browse_datalog_dir).grid(
+            row=1, column=2, padx=6, pady=5)
+        ttk.Label(dlog_lf, text="เว้นว่าง = ใช้ Logs directory เดียวกับระบบ",
+                  foreground="gray").grid(row=2, column=1, columnspan=2, sticky="w", padx=4)
+
+        ttk.Label(dlog_lf, text="Log interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(dlog_lf, textvariable=self.datalog_interval_var, width=8).grid(
+            row=3, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(dlog_lf, text="ความถี่บันทึก (ค่าเริ่มต้น 300 = 5 นาที)",
+                  foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
+
+        ttk.Label(dlog_lf, text="Status:").grid(row=4, column=0, sticky="w", padx=6, pady=(0, 6))
         ttk.Label(dlog_lf, textvariable=self._datalog_status_var,
-                  foreground="gray").grid(row=2, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 6))
+                  foreground="gray").grid(row=4, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 6))
 
         ttk.Label(dlog_lf,
-                  text="บันทึกตลอดเวลา (มีคอลัมน์สถานะ Laser) · ไฟล์ datalog_YYYYMMDD.csv ใน Logs directory\n"
+                  text="บันทึกตลอดเวลา (มีคอลัมน์สถานะ Laser) · ไฟล์ datalog_YYYYMMDD.csv\n"
                        "ขณะบันทึก คนอื่นเปิดอ่านได้แต่แก้ไข/ลบไม่ได้ จนกว่าจะปิดโปรแกรม",
                   foreground="gray", justify="left").grid(
-            row=3, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
+            row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         # ---- [LEFT COL 0] Temp & RH Sensor Settings ----
         sensor_lf = ttk.LabelFrame(parent, text="Temp & RH Sensor Settings")
@@ -2439,9 +2466,16 @@ class App(tk.Tk):
             try:
                 self._sensor_stale_sec = max(1.0, float(self.sensor_stale_var.get()))
             except Exception: pass
-            # Data logger: อัปเดต interval + สถานะเปิด/ปิด
+            # Data logger: อัปเดต interval + directory + สถานะเปิด/ปิด
             try:
                 self.datalog_interval = max(5, int(self.datalog_interval_var.get()))
+            except Exception: pass
+            try:
+                _new_dir = self.datalog_dir_var.get().strip()
+                if _new_dir != getattr(self, "datalog_dir", ""):
+                    self.datalog_dir = _new_dir
+                    # เปลี่ยนโฟลเดอร์ → ปิดไฟล์เดิมเพื่อให้เปิดไฟล์ใหม่ในโฟลเดอร์ใหม่
+                    self._datalog_close()
             except Exception: pass
             try:
                 self._apply_datalog_enabled(bool(self.datalog_enabled_var.get()))
@@ -3771,8 +3805,15 @@ class App(tk.Tk):
     # ================================================================== #
     #  Data Logger — บันทึก CSV ต่อเนื่องตลอดเวลา (วันละ 1 ไฟล์, ล็อกไฟล์)  #
     # ================================================================== #
+    def _datalog_dir(self) -> str:
+        """โฟลเดอร์เก็บไฟล์ data logger — ใช้ค่าที่ตั้งไว้ ถ้าว่างใช้ Logs directory"""
+        d = (getattr(self, "datalog_dir", "") or "").strip()
+        if not d:
+            d = getattr(self, "log_dir", LOG_DIR) or LOG_DIR
+        return d
+
     def _datalog_path_for_today(self) -> str:
-        d = getattr(self, "log_dir", LOG_DIR) or LOG_DIR
+        d = self._datalog_dir()
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, f"datalog_{datetime.now(TZ).strftime('%Y%m%d')}.csv")
 
@@ -3858,6 +3899,14 @@ class App(tk.Tk):
                     if self._datalog_fh is not None:
                         csv.writer(self._datalog_fh).writerow(self._build_logger_row())
                         self._datalog_fh.flush()
+                        # แจ้งเตือนหน้า Main ว่าบันทึกแล้ว (indicator เล็ก ไม่รบกวน)
+                        _hhmmss = datetime.now(TZ).strftime("%H:%M:%S")
+                        _fn = os.path.basename(self._datalog_path or "")
+                        try:
+                            self.after(0, lambda t=_hhmmss, f=_fn:
+                                       self._datalog_flash(t, f))
+                        except Exception:
+                            pass
             except Exception as e:
                 now_ts = time.monotonic()
                 if now_ts - self._datalog_fail_ts >= 60.0:
@@ -3889,10 +3938,27 @@ class App(tk.Tk):
             self._start_datalog()
             self.log("Data logger: ENABLED")
             self._datalog_status_var.set("Starting…")
+            self._datalog_last_var.set("Data Logger: on (waiting…)")
         else:
             self._datalog_close()
             self.log("Data logger: DISABLED")
             self._datalog_status_var.set("Disabled")
+            self._datalog_last_var.set("Data Logger: off")
+            lbl = getattr(self, "_datalog_main_lbl", None)
+            if lbl is not None:
+                try: lbl.configure(foreground="gray")
+                except Exception: pass
+
+    def _datalog_flash(self, t: str, fn: str):
+        """อัปเดต indicator หน้า Main เมื่อเพิ่งบันทึก (เขียวแวบสั้นๆ)"""
+        self._datalog_last_var.set(f"●  Data log saved {t}  ·  {fn}")
+        lbl = getattr(self, "_datalog_main_lbl", None)
+        if lbl is not None:
+            try:
+                lbl.configure(foreground="#1a8a34")           # เขียวตอนเพิ่งบันทึก
+                self.after(1500, lambda: lbl.configure(foreground="gray"))
+            except Exception:
+                pass
 
     def _toggle_telemetry(self):
         if self.record_var.get(): self._start_telemetry()
@@ -5194,6 +5260,7 @@ class App(tk.Tk):
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
                 "datalog_enabled": bool(getattr(self, "datalog_enabled", True)),
                 "datalog_interval": int(getattr(self, "datalog_interval", 300)),
+                "datalog_dir": getattr(self, "datalog_dir", ""),
                 "programs": []
             }
             for v in self.programs:
@@ -5275,10 +5342,13 @@ class App(tk.Tk):
             # Data logger settings
             self.datalog_enabled = bool(data.get("datalog_enabled", getattr(self, "datalog_enabled", True)))
             self.datalog_interval = int(data.get("datalog_interval", getattr(self, "datalog_interval", 300)))
+            self.datalog_dir = data.get("datalog_dir", getattr(self, "datalog_dir", ""))
             if hasattr(self, "datalog_enabled_var"):
                 self.datalog_enabled_var.set(self.datalog_enabled)
             if hasattr(self, "datalog_interval_var"):
                 self.datalog_interval_var.set(self.datalog_interval)
+            if hasattr(self, "datalog_dir_var"):
+                self.datalog_dir_var.set(self.datalog_dir)
 
             # FIX: load roof_auto_ctrl_var
             roof_auto_ctrl = bool(data.get("roof_auto_ctrl_enabled", True))
