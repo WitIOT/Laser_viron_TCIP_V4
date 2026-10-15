@@ -74,6 +74,12 @@
 #
 from __future__ import annotations
 import socket, threading, queue, time, csv, os, sys, re, json, calendar
+import ctypes
+from ctypes import wintypes
+try:
+    import msvcrt               # Windows-only (ใช้กับ data logger ล็อกไฟล์)
+except Exception:
+    msvcrt = None
 from datetime import datetime, timedelta, timezone, date
 try:
     from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -137,6 +143,54 @@ if not os.path.exists(CONFIG_FILE):
 
 # พอร์ตเริ่มต้นของเลเซอร์ — ใช้เมื่อผู้ใช้เว้นช่อง Port ว่าง (ไม่ต้องระบุ Port)
 DEFAULT_LASER_PORT = 2323
+
+# ---------------- Data Logger (continuous CSV) ----------------
+# ฟิลด์จาก Weather Station (ลำดับคอลัมน์ในไฟล์ log) — ใช้ร่วมกับการ์ดหน้า Main
+WEATHER_FIELDS = [
+    "RecNum", "TimeStamp", "BattV", "PTemp_C",
+    "AirT_C", "RH", "RHT_C", "VP_mbar", "BP_mbar",
+    "WS_ms", "WindDir", "MaxWS_ms", "WSPrev", "WindDirPrev",
+    "MaxWSprev", "Invalid_Wind",
+    "Rain_mm", "Strikes", "Dist_km",
+    "SlrFD_W", "SlrTF_MJ", "PPFD",
+    "TiltNS_deg", "TiltWE_deg",
+    "VWC", "EC", "T", "P", "PA", "VR",
+]
+
+# คอลัมน์แบบเดียวกับ Telemetry + "Laser" (สถานะเชื่อมต่อ) + Weather Station (prefix WX_)
+# หมายเหตุ: คอลัมน์ WX_* จะว่างจนกว่าจะต่อ API Weather Station (ค่าอ่านจาก self._wx_vars)
+DATALOG_HEADER = [
+    "Date", "Time", "Timezone", "Laser",
+    "STATUS", "QSDELAY", "DTEMF", "LTEMF", "overload", "ROOF_STATUS",
+    "In_Temp(C)", "In_RH(%)", "Out_Temp(C)", "Out_RH(%)",
+] + ["WX_" + f for f in WEATHER_FIELDS]
+
+
+def open_write_locked_append(path: str):
+    """เปิดไฟล์เพื่อเขียนต่อ (append) แบบ 'ล็อกไม่ให้คนอื่นแก้ไข' บน Windows
+    - คนอื่นยัง 'เปิดอ่าน' ได้ (FILE_SHARE_READ) แต่ 'เขียน/ลบ' ไม่ได้ขณะโปรแกรมถืออยู่
+    - โปรแกรมเองเขียนต่อได้ปกติผ่าน handle ที่ถือไว้
+    คืน Python text file object (เขียนแล้ว flush); ปิดเมื่อหมุนไฟล์/ปิดโปรแกรม
+    """
+    GENERIC_WRITE = 0x40000000
+    FILE_SHARE_READ = 0x00000001          # อนุญาตอ่านอย่างเดียว (ไม่แชร์การเขียน/ลบ)
+    OPEN_ALWAYS = 4                        # มีอยู่ก็เปิด ไม่มีก็สร้าง
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    INVALID = ctypes.c_void_p(-1).value
+
+    kernel32 = ctypes.windll.kernel32
+    CreateFileW = kernel32.CreateFileW
+    CreateFileW.restype = wintypes.HANDLE
+    CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD,
+                            wintypes.HANDLE]
+    handle = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, None,
+                         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, None)
+    if not handle or handle == INVALID:
+        raise OSError(f"CreateFileW failed (err={ctypes.get_last_error()}) for {path}")
+    # แปลง OS handle → C fd → Python file (append mode)
+    fd = msvcrt.open_osfhandle(int(handle), os.O_APPEND)
+    return os.fdopen(fd, "a", encoding="utf-8", newline="")
 
 
 # ---------------- Laser Client ----------------
@@ -590,19 +644,26 @@ class App(tk.Tk):
         self._sensor_out_dew   = 0.0
 
         # --- Weather Station UI variables (ทุก field เริ่มเป็น "-" รอต่อ API ภายหลัง) ---
-        self._WX_FIELDS = [
-            "RecNum", "TimeStamp", "BattV", "PTemp_C",
-            "AirT_C", "RH", "RHT_C", "VP_mbar", "BP_mbar",
-            "WS_ms", "WindDir", "MaxWS_ms", "WSPrev", "WindDirPrev",
-            "MaxWSprev", "Invalid_Wind",
-            "Rain_mm", "Strikes", "Dist_km",
-            "SlrFD_W", "SlrTF_MJ", "PPFD",
-            "TiltNS_deg", "TiltWE_deg",
-            "VWC", "EC", "T", "P", "PA", "VR",
-        ]
+        self._WX_FIELDS = WEATHER_FIELDS   # ใช้รายการเดียวกับ Data Logger (sync คอลัมน์)
         self._wx_vars       = {k: tk.StringVar(value="-") for k in self._WX_FIELDS}
         self._wx_status_var = tk.StringVar(value="Offline")
         self._wx_ts_var     = tk.StringVar(value="-")
+
+        # --- Data Logger (CSV ต่อเนื่อง วันละ 1 ไฟล์ ล็อกไม่ให้คนอื่นแก้) ---
+        self.datalog_enabled   = True
+        self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
+        self.datalog_dir       = ""         # ว่าง = ใช้ Logs directory เดียวกับระบบ
+        self._datalog_stop     = threading.Event()
+        self._datalog_after_id = None       # id ของ after() ลูปบันทึก
+        self._datalog_fh       = None       # file handle ที่ถือล็อกไว้
+        self._datalog_path     = None
+        self._datalog_cur_date = None       # ISO date ของไฟล์ที่เปิดอยู่
+        self._datalog_fail_ts  = 0.0        # cooldown log error เปิดไฟล์ไม่ได้
+        self.datalog_enabled_var  = tk.BooleanVar(value=self.datalog_enabled)
+        self.datalog_interval_var = tk.IntVar(value=self.datalog_interval)
+        self.datalog_dir_var      = tk.StringVar(value=self.datalog_dir)
+        self._datalog_status_var  = tk.StringVar(value="-")
+        self._datalog_last_var    = tk.StringVar(value="Data Logger: starting…")  # indicator หน้า Main
 
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
         self.rain_api_url_var      = tk.StringVar(value=self.rain_api_url)
@@ -692,6 +753,9 @@ class App(tk.Tk):
             self.add_program()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # เริ่ม Data Logger (บันทึก CSV ต่อเนื่อง) — หน่วงเล็กน้อยให้ UI พร้อม
+        self.after(1500, self._start_datalog)
 
         # เช็คอัปเดตอัตโนมัติตอนเปิด (เงียบ ๆ — เตือนเฉพาะเมื่อเจอเวอร์ชันใหม่)
         self.after(3000, lambda: self.check_for_updates(manual=False))
@@ -810,6 +874,8 @@ class App(tk.Tk):
                 self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
+            self._datalog_stop.set()
+            self._datalog_close()
             if self.laser:
                 self.laser.close()
         except Exception:
@@ -1168,6 +1234,14 @@ class App(tk.Tk):
         vis.add(self.plot_frame, weight=3); vis.add(logs_container, weight=2)
         self._ui_refs["charts_frame"] = self.plot_frame
         self._ui_refs["logs_frame"] = logs_container
+
+        # Data Logger indicator — แถบบางล่างสุดของกรอบ Logs (ไม่รบกวน layout หลัก)
+        dlog_bar = ttk.Frame(logs_container)
+        dlog_bar.pack(side=tk.BOTTOM, fill=tk.X, padx=4, pady=(0, 2))
+        self._datalog_main_lbl = ttk.Label(dlog_bar, textvariable=self._datalog_last_var,
+                                           font=("Segoe UI", 8), foreground="gray")
+        self._datalog_main_lbl.pack(side=tk.LEFT, padx=4)
+
         nb = ttk.Notebook(logs_container); nb.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
         tab_all = ttk.Frame(nb); nb.add(tab_all, text="All except Schedule")
@@ -1424,6 +1498,51 @@ class App(tk.Tk):
 
         ttk.Label(logs_lf, text="DTEMF ready >= (°C)").grid(row=4, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(logs_lf, textvariable=self.monday_warmup_threshold_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=6)
+
+        # ---- [RIGHT COL 1] Data Logger (continuous CSV) ----
+        dlog_lf = ttk.LabelFrame(parent, text="Data Logger (CSV ต่อเนื่อง — วันละ 1 ไฟล์)")
+        dlog_lf.grid(row=2, column=1, sticky="nwe", padx=10, pady=(0, 10))
+        dlog_lf.columnconfigure(1, weight=1)
+        self._ui_refs["cfg_datalog_frame"] = dlog_lf
+
+        def _toggle_datalog():
+            self._apply_datalog_enabled(bool(self.datalog_enabled_var.get()))
+        ttk.Checkbutton(dlog_lf, text="เปิดบันทึก Data Logger อัตโนมัติ (ล็อกไฟล์กันแก้ไข)",
+                        variable=self.datalog_enabled_var,
+                        command=_toggle_datalog
+                        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(6, 2))
+
+        ttk.Label(dlog_lf, text="Log directory").grid(row=1, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(dlog_lf, textvariable=self.datalog_dir_var, width=48).grid(
+            row=1, column=1, sticky="we", padx=4, pady=5)
+
+        def _browse_datalog_dir():
+            try:
+                d = filedialog.askdirectory(title="Select Data Logger directory")
+                if d:
+                    self.datalog_dir_var.set(d)
+            except Exception:
+                pass
+        ttk.Button(dlog_lf, text="Browse", command=_browse_datalog_dir).grid(
+            row=1, column=2, padx=6, pady=5)
+        ttk.Label(dlog_lf, text="เว้นว่าง = ใช้ Logs directory เดียวกับระบบ",
+                  foreground="gray").grid(row=2, column=1, columnspan=2, sticky="w", padx=4)
+
+        ttk.Label(dlog_lf, text="Log interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(dlog_lf, textvariable=self.datalog_interval_var, width=8).grid(
+            row=3, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(dlog_lf, text="ความถี่บันทึก (ค่าเริ่มต้น 300 = 5 นาที)",
+                  foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
+
+        ttk.Label(dlog_lf, text="Status:").grid(row=4, column=0, sticky="w", padx=6, pady=(0, 6))
+        ttk.Label(dlog_lf, textvariable=self._datalog_status_var,
+                  foreground="gray").grid(row=4, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 6))
+
+        ttk.Label(dlog_lf,
+                  text="บันทึกตลอดเวลา (มีคอลัมน์สถานะ Laser) · ไฟล์ datalog_YYYYMMDD.csv\n"
+                       "ขณะบันทึก คนอื่นเปิดอ่านได้แต่แก้ไข/ลบไม่ได้ จนกว่าจะปิดโปรแกรม",
+                  foreground="gray", justify="left").grid(
+            row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         # ---- [LEFT COL 0] Temp & RH Sensor Settings ----
         sensor_lf = ttk.LabelFrame(parent, text="Temp & RH Sensor Settings")
@@ -2350,6 +2469,20 @@ class App(tk.Tk):
             except Exception: pass
             try:
                 self._sensor_stale_sec = max(1.0, float(self.sensor_stale_var.get()))
+            except Exception: pass
+            # Data logger: อัปเดต interval + directory + สถานะเปิด/ปิด
+            try:
+                self.datalog_interval = max(5, int(self.datalog_interval_var.get()))
+            except Exception: pass
+            try:
+                _new_dir = self.datalog_dir_var.get().strip()
+                if _new_dir != getattr(self, "datalog_dir", ""):
+                    self.datalog_dir = _new_dir
+                    # เปลี่ยนโฟลเดอร์ → ปิดไฟล์เดิมเพื่อให้เปิดไฟล์ใหม่ในโฟลเดอร์ใหม่
+                    self._datalog_close()
+            except Exception: pass
+            try:
+                self._apply_datalog_enabled(bool(self.datalog_enabled_var.get()))
             except Exception: pass
             self.rain_api_url      = self.rain_api_url_var.get().strip()
             try:
@@ -3673,6 +3806,229 @@ class App(tk.Tk):
     def _default_csv_name(self) -> str:
         return os.path.join(getattr(self, "log_dir", LOG_DIR), f"telemetry_{datetime.now(TZ).strftime('%Y%m%d')}.csv")
 
+    # ================================================================== #
+    #  Data Logger — บันทึก CSV ต่อเนื่องตลอดเวลา (วันละ 1 ไฟล์, ล็อกไฟล์)  #
+    # ================================================================== #
+    def _datalog_dir(self) -> str:
+        """โฟลเดอร์เก็บไฟล์ data logger — ใช้ค่าที่ตั้งไว้ ถ้าว่างใช้ Logs directory"""
+        d = (getattr(self, "datalog_dir", "") or "").strip()
+        if not d:
+            d = getattr(self, "log_dir", LOG_DIR) or LOG_DIR
+        return d
+
+    def _datalog_path_for_today(self) -> str:
+        d = self._datalog_dir()
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"datalog_{datetime.now(TZ).strftime('%Y%m%d')}.csv")
+
+    def _build_logger_row(self, d=None, l=None) -> list:
+        """สร้างแถวข้อมูล 1 แถว (คอลัมน์ตาม DATALOG_HEADER)
+        ต้องเรียกบน main thread (อ่าน Tk variables) — ค่า DTEMF/LTEMF (d,l)
+        ให้ query มาจาก worker ก่อนแล้วส่งเข้ามา (เลี่ยง block UI)"""
+        now = datetime.now(TZ)
+        connected = bool(self.laser)
+        with self.manual_lock:
+            status_num = 1 if self.is_firing else 0
+        try:
+            qs = (self.qsdelay_live_var.get().strip()
+                  if hasattr(self, "qsdelay_live_var") else self.qsdelay_var.get().strip())
+        except Exception:
+            qs = ""
+
+        try:    maxv = float(self.max_temp_var.get())
+        except Exception: maxv = None
+        try:    max_dtemf = float(self.max_dtemf_var.get())
+        except Exception: max_dtemf = None
+        try:    temp_enabled = bool(self.temp_ctl_enabled.get())
+        except Exception: temp_enabled = True
+        ltemf_over = (temp_enabled and l is not None and maxv is not None and l > maxv)
+        dtemf_over = (temp_enabled and d is not None and max_dtemf is not None and d > max_dtemf)
+        overload = ltemf_over or dtemf_over
+
+        roof_state = self._get_roof_status_cached()
+        in_t, in_rh, out_t, out_rh = self._sensor_csv_values()
+
+        # ค่าจาก Weather Station — อ่านจาก self._wx_vars (ว่าง "-" จนกว่าจะต่อ API)
+        # เมื่อฟังก์ชันรับค่าจาก API ตั้งค่า self._wx_vars[...].set(...) แล้ว
+        # คอลัมน์ WX_* จะถูกบันทึกให้อัตโนมัติโดยไม่ต้องแก้ตรงนี้
+        wx_vals = []
+        for f in WEATHER_FIELDS:
+            try:
+                v = str(self._wx_vars[f].get()).strip()
+            except Exception:
+                v = ""
+            wx_vals.append("" if v in ("", "-") else v)
+
+        return [
+            now.strftime("%Y-%m-%d"),
+            now.strftime("%H:%M:%S"),
+            now.tzname() or "UTC+7",
+            "Connected" if connected else "Disconnected",
+            status_num, qs,
+            d if d is not None else "",
+            l if l is not None else "",
+            overload, roof_state,
+            in_t, in_rh, out_t, out_rh,
+        ] + wx_vals
+
+    def _datalog_ensure_file(self):
+        """เปิดไฟล์ของวันนี้ (หมุนไฟล์เมื่อข้ามวัน) พร้อมเขียน header ถ้าไฟล์ใหม่"""
+        today = datetime.now(TZ).date().isoformat()
+        if self._datalog_fh is not None and self._datalog_cur_date == today:
+            return
+        self._datalog_close()                     # ปิดไฟล์วันก่อน (ถ้ามี)
+        path, need_header = self._datalog_pick_file()
+        self._datalog_fh = open_write_locked_append(path)
+        self._datalog_path = path
+        self._datalog_cur_date = today
+        if need_header:
+            csv.writer(self._datalog_fh).writerow(DATALOG_HEADER)
+            self._datalog_fh.flush()
+        try:
+            self.after(0, lambda p=path: self._datalog_status_var.set(
+                f"Logging → {os.path.basename(p)}"))
+        except Exception:
+            pass
+        self.log(f"Data logger → {path} (locked)")
+
+    @staticmethod
+    def _datalog_header_matches(path: str) -> bool:
+        """True ถ้าบรรทัดแรกของไฟล์ = DATALOG_HEADER ปัจจุบัน (คอลัมน์ตรงกัน)"""
+        try:
+            with open(path, "r", newline="", encoding="utf-8") as f:
+                first = next(csv.reader(f), [])
+            return first == DATALOG_HEADER
+        except Exception:
+            return False
+
+    def _datalog_pick_file(self):
+        """เลือกไฟล์ของวันนี้ที่คอลัมน์ตรงรูปแบบปัจจุบัน
+        - ไฟล์ใหม่/ว่าง → ใช้เลย (ต้องเขียน header)
+        - มีอยู่+header ตรง → append ต่อ (ไม่เขียน header)
+        - มีอยู่แต่ header ไม่ตรง (เช่น ไฟล์เก่าไม่มีคอลัมน์ WX) → เลื่อนไป _2, _3, ...
+        คืน (path, need_header)
+        """
+        base = self._datalog_path_for_today()        # .../datalog_YYYYMMDD.csv
+        root, ext = os.path.splitext(base)
+        candidates = [base] + [f"{root}_{n}{ext}" for n in range(2, 100)]
+        for path in candidates:
+            if (not os.path.exists(path)) or os.path.getsize(path) == 0:
+                return path, True                    # ไฟล์ใหม่ → เขียน header
+            if self._datalog_header_matches(path):
+                return path, False                   # header ตรง → เขียนต่อ
+            # header ไม่ตรง → ลองไฟล์ถัดไป (กันเหลื่อมคอลัมน์)
+        return base, True
+
+    def _datalog_close(self):
+        fh = self._datalog_fh
+        self._datalog_fh = None
+        self._datalog_cur_date = None
+        if fh is not None:
+            try:
+                fh.flush()
+                fh.close()
+            except Exception:
+                pass
+
+    def _datalog_tick(self):
+        """รอบบันทึกหนึ่งครั้ง — ทำงานบน main thread (ปลอดภัยกับ Tk)
+        query DTEMF/LTEMF ใน worker สั้นๆ (ไม่ block UI) แล้วค่อยเขียนไฟล์"""
+        if self._datalog_stop.is_set():
+            return
+        try:
+            if getattr(self, "datalog_enabled", True):
+                if self.laser:
+                    # query เลเซอร์นอก main thread แล้วค่อยเขียน (เลี่ยง block UI)
+                    def _q():
+                        d = l = None
+                        try:
+                            d = self._query_float_quiet("$DTEMF ?")
+                            l = self._query_float_quiet("$LTEMF ?")
+                        except Exception:
+                            pass
+                        try:
+                            self.after(0, lambda: self._datalog_write(d, l))
+                        except Exception:
+                            pass
+                    threading.Thread(target=_q, daemon=True, name="DataLogQuery").start()
+                else:
+                    self._datalog_write(None, None)
+            else:
+                self._datalog_close()
+        except Exception as e:
+            now_ts = time.monotonic()
+            if now_ts - self._datalog_fail_ts >= 60.0:
+                self._datalog_fail_ts = now_ts
+                self.log(f"Data logger tick error: {e} (suppress ถัดไป 60s)")
+        finally:
+            if not self._datalog_stop.is_set():
+                interval_ms = max(5, int(getattr(self, "datalog_interval", 300))) * 1000
+                self._datalog_after_id = self.after(interval_ms, self._datalog_tick)
+
+    def _datalog_write(self, d, l):
+        """เขียน 1 แถวลงไฟล์ (เรียกบน main thread เท่านั้น)"""
+        if not getattr(self, "datalog_enabled", True) or self._datalog_stop.is_set():
+            return
+        try:
+            self._datalog_ensure_file()
+            if self._datalog_fh is not None:
+                csv.writer(self._datalog_fh).writerow(self._build_logger_row(d, l))
+                self._datalog_fh.flush()
+                self._datalog_flash(datetime.now(TZ).strftime("%H:%M:%S"),
+                                    os.path.basename(self._datalog_path or ""))
+        except Exception as e:
+            now_ts = time.monotonic()
+            if now_ts - self._datalog_fail_ts >= 60.0:
+                self._datalog_fail_ts = now_ts
+                self.log(f"Data logger error: {e} (suppress ถัดไป 60s)")
+            self._datalog_close()                 # ปล่อย handle ให้ลองเปิดใหม่รอบหน้า
+
+    def _start_datalog(self):
+        """เริ่มลูปบันทึก (after-based) — เรียกครั้งเดียวตอนเปิดแอป"""
+        self._datalog_stop.clear()
+        if self._datalog_after_id is None:
+            self._datalog_after_id = self.after(100, self._datalog_tick)
+        if not self.datalog_enabled:
+            self._datalog_status_var.set("Disabled")
+
+    def _apply_datalog_enabled(self, enabled: bool):
+        """เปิด/ปิด data logger จาก checkbox"""
+        self.datalog_enabled = bool(enabled)
+        try:
+            self.datalog_enabled_var.set(self.datalog_enabled)
+        except Exception:
+            pass
+        if self.datalog_enabled:
+            self._datalog_stop.clear()
+            # ยกเลิก tick ที่ค้าง แล้วรันทันที (เปิด+ล็อกไฟล์เดี๋ยวนี้) — กันลูปซ้อน
+            if self._datalog_after_id is not None:
+                try: self.after_cancel(self._datalog_after_id)
+                except Exception: pass
+                self._datalog_after_id = None
+            self._datalog_tick()
+            self.log("Data logger: ENABLED")
+            self._datalog_last_var.set("Data Logger: on (waiting…)")
+        else:
+            self._datalog_close()
+            self.log("Data logger: DISABLED")
+            self._datalog_status_var.set("Disabled")
+            self._datalog_last_var.set("Data Logger: off")
+            lbl = getattr(self, "_datalog_main_lbl", None)
+            if lbl is not None:
+                try: lbl.configure(foreground="gray")
+                except Exception: pass
+
+    def _datalog_flash(self, t: str, fn: str):
+        """อัปเดต indicator หน้า Main เมื่อเพิ่งบันทึก (เขียวแวบสั้นๆ)"""
+        self._datalog_last_var.set(f"●  Data log saved {t}  ·  {fn}")
+        lbl = getattr(self, "_datalog_main_lbl", None)
+        if lbl is not None:
+            try:
+                lbl.configure(foreground="#1a8a34")           # เขียวตอนเพิ่งบันทึก
+                self.after(1500, lambda: lbl.configure(foreground="gray"))
+            except Exception:
+                pass
+
     def _toggle_telemetry(self):
         if self.record_var.get(): self._start_telemetry()
         else: self._stop_telemetry()
@@ -4971,6 +5327,9 @@ class App(tk.Tk):
                 "monday_warmup_threshold": float(self.monday_warmup_threshold_var.get()),
                 "prefire_open_sec": float(getattr(self, "roof_preopen_sec", 15)),
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
+                "datalog_enabled": bool(getattr(self, "datalog_enabled", True)),
+                "datalog_interval": int(getattr(self, "datalog_interval", 300)),
+                "datalog_dir": getattr(self, "datalog_dir", ""),
                 "programs": []
             }
             for v in self.programs:
@@ -5048,6 +5407,17 @@ class App(tk.Tk):
             )
             self.roof_preopen_sec = float(data.get("prefire_open_sec", getattr(self, "roof_preopen_sec", 15)))
             self.roof_postclose_sec = float(data.get("postrest_close_sec", getattr(self, "roof_postclose_sec", 3)))
+
+            # Data logger settings
+            self.datalog_enabled = bool(data.get("datalog_enabled", getattr(self, "datalog_enabled", True)))
+            self.datalog_interval = int(data.get("datalog_interval", getattr(self, "datalog_interval", 300)))
+            self.datalog_dir = data.get("datalog_dir", getattr(self, "datalog_dir", ""))
+            if hasattr(self, "datalog_enabled_var"):
+                self.datalog_enabled_var.set(self.datalog_enabled)
+            if hasattr(self, "datalog_interval_var"):
+                self.datalog_interval_var.set(self.datalog_interval)
+            if hasattr(self, "datalog_dir_var"):
+                self.datalog_dir_var.set(self.datalog_dir)
 
             # FIX: load roof_auto_ctrl_var
             roof_auto_ctrl = bool(data.get("roof_auto_ctrl_enabled", True))
@@ -5501,6 +5871,9 @@ class App(tk.Tk):
                 self._scan_stop_flag.set()
             self.stop_all_programs()
             self._stop_telemetry()
+            # หยุด data logger + ปล่อยล็อกไฟล์
+            self._datalog_stop.set()
+            self._datalog_close()
             if self.laser: self.laser.close()
         except Exception:
             pass
