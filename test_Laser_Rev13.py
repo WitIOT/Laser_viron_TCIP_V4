@@ -278,10 +278,10 @@ class TestFireGuardSuppressedDuringRain:
         app._get_roof_status_cached = lambda: state
         app.is_raining_now = lambda: raining
         app._apply_roof_status = lambda *a, **k: None
-        # รัน callback ของ after ทันที เพื่อให้ _warn (ถ้ามี) ถูกเรียกจริง
+        # รัน callback ของ after ทันที เพื่อให้ popup (ถ้ามี) ถูกเรียกจริง
         app.after = lambda ms, fn=None, *a: (fn() if callable(fn) else None)
-        monkeypatch.setattr(L.messagebox, "showwarning",
-                            lambda *a, **k: warned.append(a))
+        # popup เป็น non-blocking ผ่าน _show_roof_popup → stub เพื่อตรวจว่าถูกเรียกไหม
+        app._show_roof_popup = lambda *a, **k: warned.append(a)
         return app
 
     def test_no_popup_when_roof_closed_during_rain(self, monkeypatch):
@@ -728,3 +728,279 @@ class Test24HMode:
         n = L.FireRestScheduler.count_fire_cycles(
             s, e, timedelta(minutes=5), timedelta(minutes=25))
         assert n == 48
+
+
+# --------------------------------------------------------------------- #
+#  Prefire auto-open retry (roof takes ~8-9s; retry if it doesn't open)
+# --------------------------------------------------------------------- #
+class _PFVar:
+    def __init__(self, v): self._v = v
+    def get(self): return self._v
+
+class TestPrefireOpenRetry:
+    def _app(self, wait_seq):
+        import Laser_Rev13 as _L
+        app = make_app()
+        app.roof_auto_sched_var = _PFVar(True)
+        app._is_program_active = lambda i: True
+        app.is_raining_now = lambda: False
+        app._is_safety_fire_enabled = lambda: True
+        app.roof_preopen_sec = 0.1
+        app.roof_move_sec = 0.0
+        app.roof_open_retries = 3
+        app.opens = []
+        app._external_on = lambda: app.opens.append(1)
+        app.warns = []
+        app._warn_roof = lambda *x, **k: app.warns.append(x)
+        app._sched_log = lambda i, m: None
+        app.schedlog_enabled = False
+        seq = list(wait_seq)
+        app._wait_roof_on = lambda **k: (seq.pop(0) if seq else True)
+        return app
+
+    def _run(self, app):
+        from datetime import timedelta
+        import Laser_Rev13 as _L
+        app._schedule_prefire_api(0, _L.datetime.now(_L.TZ) + timedelta(seconds=0.1))
+        wait_for(lambda: not (app._prefire_timers.get(0) and
+                              app._prefire_timers[0].is_alive()), timeout=2.0)
+
+    def test_open_succeeds_first_try(self):
+        app = self._app([True])
+        self._run(app)
+        assert len(app.opens) == 1
+        assert app.warns == []
+
+    def test_retries_until_open(self):
+        app = self._app([False, False, True])
+        self._run(app)
+        assert len(app.opens) == 3        # retried the POST until it opened
+        assert app.warns == []
+
+    def test_warns_after_all_retries_fail(self):
+        app = self._app([False, False, False])
+        self._run(app)
+        assert len(app.opens) == 3        # tried roof_open_retries times
+        assert len(app.warns) == 1        # then warned (non-blocking)
+
+    def test_no_warn_if_program_stopped_during_final_wait(self):
+        # กด Stop ระหว่างรอ _wait_roof_on รอบสุดท้าย → ต้องไม่เด้ง popup หลังหยุด
+        app = self._app([False, False, False])
+        active = [True]
+        app._is_program_active = lambda i: active[0]
+        calls = [0]
+        def _wait(**k):
+            calls[0] += 1
+            if calls[0] >= 3:        # ระหว่าง wait รอบสุดท้าย ผู้ใช้กด Stop
+                active[0] = False
+            return False
+        app._wait_roof_on = _wait
+        self._run(app)
+        assert app.warns == []        # ไม่เตือนเพราะโปรแกรมหยุดแล้ว
+
+    def test_no_warn_if_raining_after_retries(self):
+        # ฝนเริ่มตกช่วง retry → หลังคาปิดโดยตั้งใจ ไม่ควรเด้ง popup
+        app = self._app([False, False, False])
+        rain = [False]
+        app.is_raining_now = lambda: rain[0]
+        calls = [0]
+        def _wait(**k):
+            calls[0] += 1
+            if calls[0] >= 3:
+                rain[0] = True
+            return False
+        app._wait_roof_on = _wait
+        self._run(app)
+        assert app.warns == []
+
+
+# --------------------------------------------------------------------- #
+#  Event log (JSON Lines): schedule_YYYYMMDD.jsonl
+# --------------------------------------------------------------------- #
+class TestEventLogJson:
+    def _app(self, tmpdir):
+        app = make_app()
+        app.schedlog_enabled = True
+        app._schedlog_lock = threading.Lock()
+        app._schedlog_q = queue.Queue()
+        app._datalog_dir = lambda: str(tmpdir)
+        return app
+
+    def _drain(self, app):
+        """จำลอง writer thread: ดึงทุก record ในคิวมาเขียนไฟล์แบบ synchronous"""
+        import queue as _q
+        while True:
+            try:
+                rec = app._schedlog_q.get_nowait()
+            except _q.Empty:
+                break
+            if rec is None:
+                break
+            app._schedlog_write_record(rec)
+
+    def _read_lines(self, tmpdir):
+        import glob, os, json
+        files = glob.glob(os.path.join(str(tmpdir), "schedule_*.jsonl"))
+        assert len(files) == 1, f"expected 1 jsonl file, got {files}"
+        with open(files[0], encoding="utf-8") as f:
+            return [json.loads(x) for x in f if x.strip()]
+
+    def test_writes_jsonl_record(self, tmp_path):
+        app = self._app(tmp_path)
+        app._event_log_json("sched", "fire start", program=2)
+        self._drain(app)
+        recs = self._read_lines(tmp_path)
+        assert len(recs) == 1
+        assert recs[0]["src"] == "sched"
+        assert recs[0]["msg"] == "fire start"
+        assert recs[0]["program"] == 2
+        assert "ts" in recs[0]
+
+    def test_appends_multiple(self, tmp_path):
+        app = self._app(tmp_path)
+        app._event_log_json("app", "one")
+        app._event_log_json("app", "two")
+        self._drain(app)
+        recs = self._read_lines(tmp_path)
+        assert [r["msg"] for r in recs] == ["one", "two"]
+        assert "program" not in recs[0]
+
+    def test_disabled_enqueues_nothing(self, tmp_path):
+        app = self._app(tmp_path)
+        app.schedlog_enabled = False
+        app._event_log_json("app", "ignored")
+        assert app._schedlog_q.empty()      # ไม่ถูกคิว → ไม่มีการเขียน
+
+    def test_enqueue_never_does_io(self, tmp_path):
+        import glob, os
+        # ถึง _datalog_dir จะพัง ช่วง enqueue ก็ต้องไม่เรียก I/O/ไม่ raise
+        app = self._app(tmp_path)
+        app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        app._event_log_json("app", "x")     # enqueue only — must not touch disk/raise
+        assert glob.glob(os.path.join(str(tmp_path), "schedule_*.jsonl")) == []
+
+    def test_write_errors_are_silent(self, tmp_path):
+        app = self._app(tmp_path)
+        app._event_log_json("app", "x")
+        app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        self._drain(app)                    # writer must swallow the error
+
+
+# --------------------------------------------------------------------- #
+#  Start mid fire-slot: must shift to next slot so the roof can pre-open
+#  (bug: set 00:25-23:45 fire5/rest25, press Start at 12:56 -> "Roof Closed")
+# --------------------------------------------------------------------- #
+class TestAlignFireStartForRoof:
+    FIRE_MS = 5 * 60 * 1000      # 5 min
+    REST_MS = 25 * 60 * 1000     # 25 min  -> 30-min grid
+
+    def _app(self, roof_auto=True, safety=True, roof_state="N/A", preopen=15.0):
+        app = make_app()
+        app.roof_auto_sched_var = _PFVar(roof_auto)
+        app._is_safety_fire_enabled = lambda: safety
+        app._get_roof_status_cached = lambda: roof_state
+        app.roof_preopen_sec = preopen
+        return app
+
+    def _win(self, day=(2026, 10, 5)):
+        from datetime import datetime
+        s = datetime(*day, 0, 25, tzinfo=L.TZ)
+        e = datetime(*day, 23, 45, tzinfo=L.TZ)
+        return s, e
+
+    def test_start_inside_fire_slot_shifts_to_next_slot(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # สล็อตยิง 12:55-13:00; กดเริ่ม 12:56 (อยู่ในช่วง fire)
+        aligned = app._next_fire_time(datetime(2026,10,5,12,56,tzinfo=L.TZ), s, e,
+                                      self.FIRE_MS, self.REST_MS)
+        assert aligned == datetime(2026,10,5,12,55,tzinfo=L.TZ)   # ของเดิม = อดีต
+        out = app._align_fire_start_for_roof(aligned, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == datetime(2026,10,5,13,25,tzinfo=L.TZ)       # เลื่อนไปสล็อตถัดไป
+
+    def test_enough_lead_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # ยิง 13:25, now 13:00 -> เหลือ 25 นาที เปิดหลังคาทัน ไม่ต้องเลื่อน
+        s_dt = datetime(2026,10,5,13,25,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,13,0,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_roof_already_on_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(roof_state="ON")
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt        # หลังคาเปิดอยู่แล้ว ยิงรอบนี้ได้เลย
+
+    def test_auto_roof_off_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(roof_auto=False)
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_safety_off_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(safety=False)
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_no_slot_left_returns_none(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # กดเริ่มใกล้ปิดหน้าต่างมาก (สล็อตสุดท้าย 23:25-23:30) เปิดหลังคาไม่ทัน
+        last = datetime(2026,10,5,23,25,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(last, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,23,24,50,tzinfo=L.TZ))
+        assert out is None        # เลื่อนแล้วเกิน e_dt -> ไม่มีรอบที่ทัน
+
+
+# --------------------------------------------------------------------- #
+#  Safety alert (roof closed during fire) must bypass the popup cooldown
+# --------------------------------------------------------------------- #
+class TestRoofPopupCooldownBypass:
+    def _app(self):
+        app = make_app()
+        app._is_safety_fire_enabled = lambda: True
+        app.logs = []
+        app.log = lambda m: app.logs.append(str(m))
+        # ต้องตั้งค่าไว้ (App สืบทอด tk.Tk → __getattr__ วนซ้ำถ้า attribute ไม่มีจริง)
+        app._roof_popup_ts = 0.0
+        app._roof_popup_win = None
+        # Toplevel สร้างไม่ได้บน bare object -> ฟังก์ชัน except แล้ว return
+        # เราวัดพฤติกรรม cooldown ก่อนถึงส่วนสร้างหน้าต่างเท่านั้น
+        return app
+
+    def _suppressed(self, app):
+        return sum(1 for m in app.logs if "suppressed (cooldown)" in m)
+
+    def test_second_normal_popup_is_suppressed(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._show_roof_popup("m2", cooldown_sec=30.0)   # ภายใน cooldown
+        assert self._suppressed(app) == 1
+
+    def test_force_bypasses_cooldown(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._show_roof_popup("safety", cooldown_sec=10.0, force=True)  # ต้องไม่ถูกกลืน
+        assert self._suppressed(app) == 0
+
+    def test_warn_roof_force_passes_through(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._warn_roof("Roof Closed!", "during fire", force=True)
+        assert self._suppressed(app) == 0

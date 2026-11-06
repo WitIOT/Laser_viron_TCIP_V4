@@ -663,6 +663,18 @@ class App(tk.Tk):
         self.datalog_interval_var = tk.IntVar(value=self.datalog_interval)
         self.datalog_dir_var      = tk.StringVar(value=self.datalog_dir)
         self._datalog_status_var  = tk.StringVar(value="-")
+
+        # --- Event log (JSON Lines): บันทึก Schedule/program events รายวัน ---
+        # เขียนไฟล์บน background thread เท่านั้น — log()/_sched_log() แค่ enqueue
+        # (ห้ามทำ file I/O บน main thread เพราะจะทำให้ Tk event loop ค้าง)
+        self.schedlog_enabled = True
+        self._schedlog_lock   = threading.Lock()
+        self._schedlog_q      = queue.Queue()
+        self._schedlog_stop   = threading.Event()
+        self.schedlog_enabled_var = tk.BooleanVar(value=self.schedlog_enabled)
+        self._schedlog_thread = threading.Thread(
+            target=self._schedlog_writer_loop, daemon=True, name="SchedLogWriter")
+        self._schedlog_thread.start()
         self._datalog_last_var    = tk.StringVar(value="Data Logger: starting…")  # indicator หน้า Main
 
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
@@ -706,6 +718,8 @@ class App(tk.Tk):
         self.roof_auto_ctrl_var = tk.BooleanVar(value=True)  # เปิดอัตโนมัติ/ปิดตามสถานะเลเซอร์
         self.roof_preopen_sec = 15  # เปิดก่อน FIRE กี่วินาที
         self.roof_postclose_sec = 3  # ปิดหลัง REST กี่วินาที
+        self.roof_move_sec = 9.0    # เวลาหลังคาเคลื่อนเปิด/ปิดจริง ~8-9 วิ (ใช้คิด retry)
+        self.roof_open_retries = 2  # จำนวนครั้งที่ลองเปิดหลังคาใน prefire ถ้ายังไม่เปิด
 
         # --- Monday warmup logic ---
         self.monday_warmup_enabled_var = tk.BooleanVar(value=False)
@@ -1187,14 +1201,8 @@ class App(tk.Tk):
         self._ui_refs["roof_close_btn"] = btn_roof_close
         self._ui_refs["roof_status_lbl"] = self.roof_status_lbl
 
-        self.roof_auto_sched_cb = ttk.Checkbutton(
-            frm_roof,
-            text="Enable auto open (T-15s) / auto close (+3s)",
-            variable=self.roof_auto_sched_var,
-        )
-        self.roof_auto_sched_cb.pack(side=tk.RIGHT, padx=6)
-        self._update_roof_auto_label()
-        self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
+        # หมายเหตุ: checkbox "Enable auto open/close" ย้ายไปแท็บ Settings/Config แล้ว
+        # (ดู _build_config_tab → กรอบ Sliding Roof Timing)
 
         # self.roof_auto_var = tk.BooleanVar(value=True)
         # ttk.Checkbutton(frm_roof, text="Auto-refresh (5s)",
@@ -1452,6 +1460,16 @@ class App(tk.Tk):
         ttk.Label(roof_lf, text="Used by auto open/close around FIRE/REST", foreground="gray")\
             .grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
 
+        # Auto open/close toggle (ย้ายมาจากหน้า Main)
+        self.roof_auto_sched_cb = ttk.Checkbutton(
+            roof_lf,
+            text="Enable auto open (T-15s) / auto close (+3s)",
+            variable=self.roof_auto_sched_var,
+        )
+        self.roof_auto_sched_cb.grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 6))
+        self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
+        self._update_roof_auto_label()
+
         # ---- [RIGHT COL 1] Logs & System Settings ----
         logs_lf = ttk.LabelFrame(parent, text="Logs & System Settings")
         logs_lf.grid(row=1, column=1, sticky="nwe", padx=10, pady=10)
@@ -1543,6 +1561,26 @@ class App(tk.Tk):
                        "ขณะบันทึก คนอื่นเปิดอ่านได้แต่แก้ไข/ลบไม่ได้ จนกว่าจะปิดโปรแกรม",
                   foreground="gray", justify="left").grid(
             row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
+
+        ttk.Separator(dlog_lf, orient="horizontal").grid(
+            row=6, column=0, columnspan=3, sticky="we", padx=6, pady=(2, 4))
+
+        def _toggle_schedlog():
+            try:
+                self.schedlog_enabled = bool(self.schedlog_enabled_var.get())
+            except Exception:
+                pass
+        self.schedlog_enabled_cb = ttk.Checkbutton(
+            dlog_lf,
+            text="บันทึก Schedule/Event logs เป็น JSON (schedule_YYYYMMDD.jsonl)",
+            variable=self.schedlog_enabled_var,
+            command=_toggle_schedlog)
+        self.schedlog_enabled_cb.grid(row=7, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 2))
+        self._ui_refs["cfg_schedlog_cb"] = self.schedlog_enabled_cb
+        ttk.Label(dlog_lf,
+                  text="บันทึกเหตุการณ์โปรแกรม/ตารางเวลาแบบ 1 บรรทัด = 1 เหตุการณ์ (ไว้ตรวจย้อนหลัง)",
+                  foreground="gray", justify="left").grid(
+            row=8, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         # ---- [LEFT COL 0] Temp & RH Sensor Settings ----
         sensor_lf = ttk.LabelFrame(parent, text="Temp & RH Sensor Settings")
@@ -2882,12 +2920,13 @@ class App(tk.Tk):
                       "• ฝนตก → ปิดหลังคา + หยุดโปรแกรมอัตโนมัติ"),
              "widget": "roof_frame", "on_show": show_after_temp, "shape": R},
 
-            {"title": "8.1 เปิด/ปิดหลังคาอัตโนมัติ",
-             "body": ("ติ๊ก 'Enable auto open/close' ให้ระบบจัดการเอง:\n"
+            {"title": "8.1 เปิด/ปิดหลังคาอัตโนมัติ (ในแท็บ Settings)",
+             "body": ("ไปที่แท็บ Settings/Config → กรอบ Roof Settings\n"
+                      "ติ๊ก 'Enable auto open/close' ให้ระบบจัดการเอง:\n"
                       "• เปิดก่อนถึงเวลายิง (Pre-open lead)\n"
                       "• ปิดหลังพัก (Post-close delay)\n"
                       "เหมาะกับรันโปรแกรมยาว"),
-             "widget": "roof_auto_cb", "on_show": main},
+             "widget": "roof_auto_cb", "on_show": cfg, "shape": R},
 
             {"title": "9. โปรแกรมยิงอัตโนมัติ",
              "body": ("ตั้งเวลายิงเป็นรอบ FIRE/REST อัตโนมัติ\n"
@@ -4376,14 +4415,59 @@ class App(tk.Tk):
     def clear_terminal(self): self.log_text.delete("1.0", tk.END)
     def clear_sched_terminal(self): self.sched_log_text.delete("1.0", tk.END)
 
+    def _event_log_json(self, src: str, msg: str, program=None):
+        """คิว event ลงไฟล์ JSON Lines รายวัน (schedule_YYYYMMDD.jsonl)
+        เรียกจาก log()/_sched_log() ได้ทุก thread — ทำแค่ enqueue (ไม่มี file I/O)
+        จึงไม่บล็อก Tk event loop; การเขียนไฟล์จริงอยู่บน _schedlog_writer_loop()
+        เงียบเสมอเมื่อ error (กัน recursion กับ log())"""
+        if not getattr(self, "schedlog_enabled", True):
+            return
+        try:
+            rec = {"ts": datetime.now(TZ).isoformat(timespec="seconds"),
+                   "src": src, "msg": str(msg)}
+            if program is not None:
+                rec["program"] = program
+            self._schedlog_q.put_nowait(rec)
+        except Exception:
+            pass
+
+    def _schedlog_write_record(self, rec: dict):
+        """เขียน record เดียวลงไฟล์ JSONL (บล็อก I/O — ต้องเรียกบน writer thread เท่านั้น)"""
+        try:
+            d = self._datalog_dir()
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"schedule_{datetime.now(TZ).strftime('%Y%m%d')}.jsonl")
+            line = json.dumps(rec, ensure_ascii=False)
+            with self._schedlog_lock:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
+
+    def _schedlog_writer_loop(self):
+        """background thread: ดึง record จากคิวแล้วเขียนไฟล์ทีละรายการ
+        สั่งหยุดด้วยการ put(None) (sentinel) ใน on_close — จะ flush คิวที่ค้างให้หมดก่อน"""
+        q = self._schedlog_q
+        while True:
+            try:
+                rec = q.get()
+            except Exception:
+                continue
+            if rec is None:          # sentinel = ปิดโปรแกรม
+                break
+            self._schedlog_write_record(rec)
+
     def log(self, msg: str):
         stamp = datetime.now(TZ).strftime("%H:%M:%S")
         self.msg_q.put(f"[{stamp}] {msg}")
+        self._event_log_json("app", msg)
 
     def _sched_log(self, idx, msg: str):
         stamp = datetime.now(TZ).strftime("%H:%M:%S")
         label = f"SCHED#{idx+1}" if idx is not None else "SCHED"
         self.msg_q.put(f"[{label}] [{stamp}] {msg}")
+        self._event_log_json("sched", msg,
+                             program=(idx + 1 if idx is not None else None))
 
     def _drain_logs(self):
         try:
@@ -4564,6 +4648,46 @@ class App(tk.Tk):
         if candidate >= end_dt:
             return None
         return candidate
+
+    def _align_fire_start_for_roof(self, s_dt, e_dt, fire_ms, rest_ms, now_dt):
+        """กันเคส 'เริ่มกลางรอบ fire' แล้วเปิดหลังคาไม่ทัน → เลื่อนไปยิงรอบถัดไป
+
+        อาการเดิม: ถ้ากด Start ขณะอยู่ในช่วง fire ของรอบปัจจุบัน (เช่น ตั้ง 00:25–23:45
+        ยิง 5 พัก 25 แล้วกดเริ่ม 12:56 ซึ่งตกในสล็อต 12:55–13:00) ระบบจะพยายามยิงทันที
+        แต่ prefire ถูกข้าม (เวลายิงผ่านไปแล้ว) หลังคาจึงยังปิด → guard บล็อก + เด้ง 'Roof Closed'
+
+        เลื่อน s_dt ไปรอบยิงถัดไปจนกว่าจะเหลือเวลาพอให้ prefire เปิดหลังคาก่อนยิง
+        คืนค่า s_dt ใหม่ (อาจเท่าเดิม) หรือ None ถ้าไม่เหลือรอบที่ทันในหน้าต่างนี้
+
+        ใช้เฉพาะเมื่อ auto-roof เปิด + safety เปิด + หลังคายังไม่ ON
+        (ถ้าหลังคาเปิดอยู่แล้ว/ไม่ต้องพึ่งหลังคา → ยิงรอบปัจจุบันได้เลย)
+        """
+        try:
+            if s_dt is None:
+                return None
+            if not self.roof_auto_sched_var.get():
+                return s_dt
+            if not self._is_safety_fire_enabled():
+                return s_dt
+            if self._get_roof_status_cached() == "ON":
+                return s_dt
+            # ต้องการเวลา >= roof_preopen_sec เพื่อให้ prefire ถูกตั้ง (ไม่ถูกข้าม)
+            # + buffer เล็กน้อยให้หลังคาเคลื่อน/cache อัปเดตทัน
+            req = float(getattr(self, "roof_preopen_sec", 15)) + 2.0
+            cycle = timedelta(milliseconds=(fire_ms + rest_ms))
+            if cycle.total_seconds() <= 0:
+                return s_dt
+            guard = 0
+            while (s_dt - now_dt).total_seconds() < req:
+                s_dt = s_dt + cycle
+                if s_dt >= e_dt:
+                    return None
+                guard += 1
+                if guard > 100000:
+                    return None
+            return s_dt
+        except Exception:
+            return s_dt
 
     def clear_dtemf_cache(self):
         self.last_dtemf = None
@@ -4916,6 +5040,25 @@ class App(tk.Tk):
                                 s_dt = a2
                     else:
                         s_dt = aligned
+
+                # ❗ ถ้าเริ่มกลางรอบ fire จนเปิดหลังคาไม่ทัน → เลื่อนไปรอบยิงถัดไป
+                # (กันอาการ "Roof Closed" ตอนกด Start กลางสล็อตยิง)
+                if s_dt is not None:
+                    s_adj = self._align_fire_start_for_roof(
+                        s_dt, e_dt, fire_ms, rest_ms, datetime.now(TZ))
+                    if s_adj is None:
+                        self._sched_log(
+                            idx, "เริ่มกลางรอบ: ไม่เหลือรอบที่เปิดหลังคาทันในหน้าต่างนี้ → ไปหน้าต่างถัดไป")
+                        s_dt, e_dt = self.compute_next_occurrence(idx, e_dt)
+                        if not s_dt:
+                            self._sched_log(idx, "ไม่มีรอบถัดไป (จบโปรแกรม)")
+                            break
+                    elif s_adj != s_dt:
+                        self._sched_log(
+                            idx,
+                            f"เริ่มกลางรอบ fire: เลื่อนไปยิงรอบถัดไป "
+                            f"{s_adj.strftime('%H:%M:%S')} เพื่อให้เปิดหลังคาทัน")
+                        s_dt = s_adj
 
                 try:
                     self._schedule_prefire_api(idx, s_dt)
@@ -5327,6 +5470,9 @@ class App(tk.Tk):
                 "monday_warmup_threshold": float(self.monday_warmup_threshold_var.get()),
                 "prefire_open_sec": float(getattr(self, "roof_preopen_sec", 15)),
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
+                "roof_move_sec": float(getattr(self, "roof_move_sec", 9.0)),
+                "roof_open_retries": int(getattr(self, "roof_open_retries", 3)),
+                "schedlog_enabled": bool(self.schedlog_enabled_var.get()) if hasattr(self, "schedlog_enabled_var") else bool(getattr(self, "schedlog_enabled", True)),
                 "datalog_enabled": bool(getattr(self, "datalog_enabled", True)),
                 "datalog_interval": int(getattr(self, "datalog_interval", 300)),
                 "datalog_dir": getattr(self, "datalog_dir", ""),
@@ -5407,6 +5553,14 @@ class App(tk.Tk):
             )
             self.roof_preopen_sec = float(data.get("prefire_open_sec", getattr(self, "roof_preopen_sec", 15)))
             self.roof_postclose_sec = float(data.get("postrest_close_sec", getattr(self, "roof_postclose_sec", 3)))
+            self.roof_move_sec = float(data.get("roof_move_sec", getattr(self, "roof_move_sec", 9.0)))
+            self.roof_open_retries = int(data.get("roof_open_retries", getattr(self, "roof_open_retries", 3)))
+            self.schedlog_enabled = bool(data.get("schedlog_enabled", getattr(self, "schedlog_enabled", True)))
+            if hasattr(self, "schedlog_enabled_var"):
+                try:
+                    self.schedlog_enabled_var.set(self.schedlog_enabled)
+                except Exception:
+                    pass
 
             # Data logger settings
             self.datalog_enabled = bool(data.get("datalog_enabled", getattr(self, "datalog_enabled", True)))
@@ -5793,29 +5947,57 @@ class App(tk.Tk):
                 self._sched_log(idx, "⛔ prefire ยกเลิก: ฝนตก → ไม่เปิดหลังคา")
                 return
 
-            if self.roof_auto_sched_var.get():
-                self._external_on()
-
+            # Safety off → ไม่บังคับ/ไม่รอ roof (เปิดให้ครั้งเดียวพอ)
             if not self._is_safety_fire_enabled():
+                if self.roof_auto_sched_var.get():
+                    self._external_on()
                 self.log("Safety Fire = OFF: Roof not ON (prefire popup suppressed, allow firing)")
                 return
-        
-            if not self._wait_roof_on(timeout=12.0, interval=0.5):
-                def _warn():
-                    try:
-                        self._warn_roof(
-                            "Roof Closed!",
-                            "Roof closed during laser firing.\nThe laser was stopped for safety."
-                            )
-                    except Exception:
-                        pass
 
+            # เปิดหลังคา + รอให้ 'เปิดจริง' (หลังคาเคลื่อน ~8-9 วิ) พร้อม retry
+            # กันกรณี POST /door/open พลาดชั่วคราว หรือหลังคาเปิดช้ากว่าปกติ
+            move_sec = float(getattr(self, "roof_move_sec", 9.0))
+            per_wait = move_sec + 4.0          # margin + เวลา roof-poll อัปเดต cache
+            max_attempts = int(getattr(self, "roof_open_retries", 3))
+            opened = False
+            for attempt in range(1, max_attempts + 1):
+                # เลิกถ้าโปรแกรมหยุด/ฝนตกระหว่าง retry
+                if not self._is_program_active(idx):
+                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: โปรแกรมหยุดแล้ว")
+                    return
+                if self.is_raining_now():
+                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: ฝนตก")
+                    return
+                if self.roof_auto_sched_var.get():
+                    self._external_on()        # POST เปิดหลังคา (ลองเปิดซ้ำได้ — idempotent)
+                if self._wait_roof_on(timeout=per_wait, interval=0.5):
+                    opened = True
+                    if attempt > 1:
+                        self._sched_log(idx, f"✅ prefire: หลังคาเปิดสำเร็จ (retry ครั้งที่ {attempt})")
+                    break
+                self._sched_log(
+                    idx,
+                    f"prefire: หลังคายังไม่เปิดใน {per_wait:.0f}s "
+                    f"(ครั้งที่ {attempt}/{max_attempts}) → ลองเปิดใหม่")
+
+            if not opened:
+                # ❗ โปรแกรมอาจถูก Stop/ฝนตก ระหว่างรอ _wait_roof_on รอบสุดท้าย
+                # ถ้าไม่ active แล้ว ห้ามเด้ง popup (กันการแจ้งเตือนค้างหลังหยุดโปรแกรม)
+                if not self._is_program_active(idx):
+                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ แต่โปรแกรมหยุดแล้ว → ไม่เตือน")
+                    return
+                if self.is_raining_now():
+                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ ขณะฝนตก (หลังคาปิดโดยตั้งใจ) → ไม่เตือน")
+                    return
+                # ครบ retry แล้วยังไม่เปิด → เตือน (non-blocking) + ปล่อยให้ guard บล็อกการยิง
                 try:
-                    self.after(0, _warn)
+                    self.after(0, lambda: self._warn_roof(
+                        "Roof Closed!",
+                        "Auto-open failed: the roof did not open in time after retries.\n"
+                        "Firing is blocked until the roof is ON."))
                 except Exception:
                     pass
-
-                self.log("❌ ยกเลิกการยิงอัตโนมัติ: Roof ไม่เปิดตามกำหนดเวลา")
+                self.log("❌ auto-open ล้มเหลวหลัง retry — หลังคาไม่เปิดตามกำหนด")
                 return
 
         t = threading.Timer(delay, _go)
@@ -5874,6 +6056,12 @@ class App(tk.Tk):
             # หยุด data logger + ปล่อยล็อกไฟล์
             self._datalog_stop.set()
             self._datalog_close()
+            # flush event log ที่ค้างในคิวแล้วหยุด writer thread
+            try:
+                self._schedlog_stop.set()
+                self._schedlog_q.put_nowait(None)
+            except Exception:
+                pass
             if self.laser: self.laser.close()
         except Exception:
             pass
@@ -6553,14 +6741,11 @@ class App(tk.Tk):
                 self.log(f"Fire blocked: Roof {state} ขณะฝนตก (popup suppressed)")
                 return False
 
-            # เตือนผ่าน main thread เท่านั้น
-            def _warn():
-                messagebox.showwarning(
-                    "Roof Closed",
-                    "Laser firing is blocked.\nRoof status (DI1) = %s.\n\nPlease open the roof (Roof = ON)." % state
-                )
+            # เตือนผ่าน main thread — ใช้ popup non-blocking (ไม่บล็อก event loop)
             try:
-                self.after(0, _warn)
+                self.after(0, lambda s=state: self._show_roof_popup(
+                    "Laser firing is blocked.\nRoof status (DI1) = %s.\n\n"
+                    "Please open the roof (Roof = ON)." % s))
             except Exception:
                 pass
 
@@ -6646,7 +6831,8 @@ class App(tk.Tk):
                         0,
                         lambda: self._warn_roof(
                             "Roof Closed!",
-                            "Roof closed during laser firing.\nThe laser was stopped immediately for safety."
+                            "Roof closed during laser firing.\nThe laser was stopped immediately for safety.",
+                            force=True   # safety alert — ต้องแสดงเสมอ ไม่ติด cooldown
                         )
                     )
                 except Exception as e:
@@ -6673,42 +6859,93 @@ class App(tk.Tk):
         except Exception:
             return "N/A"
 
-    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0):
-        """เตือนเรื่อง roof โดยเคารพ Safety Fire + ใส่วันเวลา + กัน popup ซ้ำถี่ ๆ"""
-
-        # ปิด safety => ไม่ต้องเตือน
+    def _show_roof_popup(self, message: str, title: str = "Roof Closed",
+                         cooldown_sec: float = 30.0, force: bool = False):
+        """เตือนเรื่อง Roof แบบ NON-BLOCKING (singleton + auto-dismiss + cooldown)
+        ❗ แทน messagebox.showwarning (modal) ที่บล็อก/ซ้อน event loop — ซึ่งทำให้
+        การ poll สถานะหลังคาหยุด cache ค้าง และ prefire/guard ล้มต่อเนื่องเป็น cascade
+        ต้องเรียกบน main thread (สร้าง Tk widget)
+        force=True : alert ด้านความปลอดภัย (เช่น หลังคาปิดขณะยิง) — ข้าม cooldown เสมอ
+        """
         if not self._is_safety_fire_enabled():
             return
+        # cooldown กันเด้งถี่ (เช่น ยิงถูกบล็อกทุก 30 นาที — แต่กันเผื่อ burst)
+        # แต่ safety alert (force=True) ต้องแสดงเสมอ ไม่ถูก cooldown ของ popup อื่นกลืน
+        now_ts = time.monotonic()
+        if not force:
+            last = getattr(self, "_roof_popup_ts", 0.0)
+            if (now_ts - last) < cooldown_sec:
+                self.log("Roof warning suppressed (cooldown)")
+                return
+        self._roof_popup_ts = now_ts
 
-        import time
-        from datetime import datetime
+        # singleton — ปิดอันเก่าก่อน (ไม่ stack)
+        old = getattr(self, "_roof_popup_win", None)
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.destroy()
+            except Exception:
+                pass
+        self._roof_popup_win = None
 
-        # cooldown กันเด้งถี่
-        now_ts = time.time()
-        last = getattr(self, "_last_roof_warn_ts", 0.0)
-        if (now_ts - last) < cooldown_sec:
+        ts_text = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S") + " (UTC+7)"
+        try:
+            win = tk.Toplevel(self)
+        except Exception:
             return
-        self._last_roof_warn_ts = now_ts
+        self._roof_popup_win = win
+        win.title(title)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.geometry("420x210+140+140")
 
-        # เวลา ณ ตอนตรวจพบ (พยายามใช้ TZ ของแอป ถ้ามี)
-        try:
-            tz = getattr(self, "TZ", None)  # ถ้าคุณมีตัวแปร TZ อยู่ในคลาส
-            dt = datetime.now(tz) if tz else datetime.now()
-            ts_text = dt.strftime("%Y-%m-%d %H:%M:%S")
-            if tz:
-                # ถ้า TZ มีอยู่ โดยทั่วไปคุณแสดง (UTC+7) อยู่แล้ว
-                ts_text += " (UTC+7)"
-        except Exception:
-            ts_text = ""
+        frm = tk.Frame(win, bg="#7a1f1f", padx=16, pady=14)
+        frm.pack(fill="both", expand=True)
+        tk.Label(frm, text="⚠  " + title, font=("Segoe UI", 14, "bold"),
+                 fg="white", bg="#7a1f1f").pack(anchor="w", pady=(0, 6))
+        tk.Label(frm, text=f"{message}\n\nDetected at: {ts_text}",
+                 font=("Segoe UI", 9), fg="white", bg="#7a1f1f",
+                 justify="left").pack(anchor="w")
 
-        msg = message
-        if ts_text:
-            msg = f"{message}\n\nDetected at: {ts_text}"
+        _AUTO = 20
+        cv = tk.StringVar(value=f"Auto-close in {_AUTO}s")
+        tk.Label(frm, textvariable=cv, font=("Segoe UI", 8),
+                 fg="#ffcccc", bg="#7a1f1f").pack(anchor="e", pady=(8, 0))
 
-        try:
-            messagebox.showwarning(title, msg)
-        except Exception:
-            pass
+        def _close():
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except Exception:
+                pass
+            if getattr(self, "_roof_popup_win", None) is win:
+                self._roof_popup_win = None
+
+        tk.Button(frm, text="OK", width=10, command=_close,
+                  cursor="hand2").pack(anchor="e", pady=(4, 0))
+        win.protocol("WM_DELETE_WINDOW", _close)
+
+        rem = [_AUTO]
+        def _tick():
+            try:
+                if not win.winfo_exists():
+                    return
+                rem[0] -= 1
+                if rem[0] <= 0:
+                    _close()
+                    return
+                cv.set(f"Auto-close in {rem[0]}s")
+                self.after(1000, _tick)
+            except Exception:
+                pass
+        self.after(1000, _tick)
+
+    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0,
+                   force: bool = False):
+        """เตือนเรื่อง roof — ใช้ popup non-blocking (เดิมใช้ messagebox modal)
+        force=True สำหรับ safety alert ที่ต้องแสดงเสมอ (ข้าม cooldown)"""
+        self._show_roof_popup(message, title=title, cooldown_sec=cooldown_sec, force=force)
 
     def _patch_messagebox_with_timestamp(self):
         """Append timestamp to all messageboxes (once)."""
