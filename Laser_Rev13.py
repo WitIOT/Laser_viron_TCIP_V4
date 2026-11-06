@@ -4649,6 +4649,46 @@ class App(tk.Tk):
             return None
         return candidate
 
+    def _align_fire_start_for_roof(self, s_dt, e_dt, fire_ms, rest_ms, now_dt):
+        """กันเคส 'เริ่มกลางรอบ fire' แล้วเปิดหลังคาไม่ทัน → เลื่อนไปยิงรอบถัดไป
+
+        อาการเดิม: ถ้ากด Start ขณะอยู่ในช่วง fire ของรอบปัจจุบัน (เช่น ตั้ง 00:25–23:45
+        ยิง 5 พัก 25 แล้วกดเริ่ม 12:56 ซึ่งตกในสล็อต 12:55–13:00) ระบบจะพยายามยิงทันที
+        แต่ prefire ถูกข้าม (เวลายิงผ่านไปแล้ว) หลังคาจึงยังปิด → guard บล็อก + เด้ง 'Roof Closed'
+
+        เลื่อน s_dt ไปรอบยิงถัดไปจนกว่าจะเหลือเวลาพอให้ prefire เปิดหลังคาก่อนยิง
+        คืนค่า s_dt ใหม่ (อาจเท่าเดิม) หรือ None ถ้าไม่เหลือรอบที่ทันในหน้าต่างนี้
+
+        ใช้เฉพาะเมื่อ auto-roof เปิด + safety เปิด + หลังคายังไม่ ON
+        (ถ้าหลังคาเปิดอยู่แล้ว/ไม่ต้องพึ่งหลังคา → ยิงรอบปัจจุบันได้เลย)
+        """
+        try:
+            if s_dt is None:
+                return None
+            if not self.roof_auto_sched_var.get():
+                return s_dt
+            if not self._is_safety_fire_enabled():
+                return s_dt
+            if self._get_roof_status_cached() == "ON":
+                return s_dt
+            # ต้องการเวลา >= roof_preopen_sec เพื่อให้ prefire ถูกตั้ง (ไม่ถูกข้าม)
+            # + buffer เล็กน้อยให้หลังคาเคลื่อน/cache อัปเดตทัน
+            req = float(getattr(self, "roof_preopen_sec", 15)) + 2.0
+            cycle = timedelta(milliseconds=(fire_ms + rest_ms))
+            if cycle.total_seconds() <= 0:
+                return s_dt
+            guard = 0
+            while (s_dt - now_dt).total_seconds() < req:
+                s_dt = s_dt + cycle
+                if s_dt >= e_dt:
+                    return None
+                guard += 1
+                if guard > 100000:
+                    return None
+            return s_dt
+        except Exception:
+            return s_dt
+
     def clear_dtemf_cache(self):
         self.last_dtemf = None
         try:
@@ -5000,6 +5040,25 @@ class App(tk.Tk):
                                 s_dt = a2
                     else:
                         s_dt = aligned
+
+                # ❗ ถ้าเริ่มกลางรอบ fire จนเปิดหลังคาไม่ทัน → เลื่อนไปรอบยิงถัดไป
+                # (กันอาการ "Roof Closed" ตอนกด Start กลางสล็อตยิง)
+                if s_dt is not None:
+                    s_adj = self._align_fire_start_for_roof(
+                        s_dt, e_dt, fire_ms, rest_ms, datetime.now(TZ))
+                    if s_adj is None:
+                        self._sched_log(
+                            idx, "เริ่มกลางรอบ: ไม่เหลือรอบที่เปิดหลังคาทันในหน้าต่างนี้ → ไปหน้าต่างถัดไป")
+                        s_dt, e_dt = self.compute_next_occurrence(idx, e_dt)
+                        if not s_dt:
+                            self._sched_log(idx, "ไม่มีรอบถัดไป (จบโปรแกรม)")
+                            break
+                    elif s_adj != s_dt:
+                        self._sched_log(
+                            idx,
+                            f"เริ่มกลางรอบ fire: เลื่อนไปยิงรอบถัดไป "
+                            f"{s_adj.strftime('%H:%M:%S')} เพื่อให้เปิดหลังคาทัน")
+                        s_dt = s_adj
 
                 try:
                     self._schedule_prefire_api(idx, s_dt)
@@ -6772,7 +6831,8 @@ class App(tk.Tk):
                         0,
                         lambda: self._warn_roof(
                             "Roof Closed!",
-                            "Roof closed during laser firing.\nThe laser was stopped immediately for safety."
+                            "Roof closed during laser firing.\nThe laser was stopped immediately for safety.",
+                            force=True   # safety alert — ต้องแสดงเสมอ ไม่ติด cooldown
                         )
                     )
                 except Exception as e:
@@ -6800,20 +6860,23 @@ class App(tk.Tk):
             return "N/A"
 
     def _show_roof_popup(self, message: str, title: str = "Roof Closed",
-                         cooldown_sec: float = 30.0):
+                         cooldown_sec: float = 30.0, force: bool = False):
         """เตือนเรื่อง Roof แบบ NON-BLOCKING (singleton + auto-dismiss + cooldown)
         ❗ แทน messagebox.showwarning (modal) ที่บล็อก/ซ้อน event loop — ซึ่งทำให้
         การ poll สถานะหลังคาหยุด cache ค้าง และ prefire/guard ล้มต่อเนื่องเป็น cascade
         ต้องเรียกบน main thread (สร้าง Tk widget)
+        force=True : alert ด้านความปลอดภัย (เช่น หลังคาปิดขณะยิง) — ข้าม cooldown เสมอ
         """
         if not self._is_safety_fire_enabled():
             return
         # cooldown กันเด้งถี่ (เช่น ยิงถูกบล็อกทุก 30 นาที — แต่กันเผื่อ burst)
+        # แต่ safety alert (force=True) ต้องแสดงเสมอ ไม่ถูก cooldown ของ popup อื่นกลืน
         now_ts = time.monotonic()
-        last = getattr(self, "_roof_popup_ts", 0.0)
-        if (now_ts - last) < cooldown_sec:
-            self.log("Roof warning suppressed (cooldown)")
-            return
+        if not force:
+            last = getattr(self, "_roof_popup_ts", 0.0)
+            if (now_ts - last) < cooldown_sec:
+                self.log("Roof warning suppressed (cooldown)")
+                return
         self._roof_popup_ts = now_ts
 
         # singleton — ปิดอันเก่าก่อน (ไม่ stack)
@@ -6878,9 +6941,11 @@ class App(tk.Tk):
                 pass
         self.after(1000, _tick)
 
-    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0):
-        """เตือนเรื่อง roof — ใช้ popup non-blocking (เดิมใช้ messagebox modal)"""
-        self._show_roof_popup(message, title=title, cooldown_sec=cooldown_sec)
+    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0,
+                   force: bool = False):
+        """เตือนเรื่อง roof — ใช้ popup non-blocking (เดิมใช้ messagebox modal)
+        force=True สำหรับ safety alert ที่ต้องแสดงเสมอ (ข้าม cooldown)"""
+        self._show_roof_popup(message, title=title, cooldown_sec=cooldown_sec, force=force)
 
     def _patch_messagebox_with_timestamp(self):
         """Append timestamp to all messageboxes (once)."""

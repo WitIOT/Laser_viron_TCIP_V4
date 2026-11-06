@@ -884,3 +884,123 @@ class TestEventLogJson:
         app._event_log_json("app", "x")
         app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
         self._drain(app)                    # writer must swallow the error
+
+
+# --------------------------------------------------------------------- #
+#  Start mid fire-slot: must shift to next slot so the roof can pre-open
+#  (bug: set 00:25-23:45 fire5/rest25, press Start at 12:56 -> "Roof Closed")
+# --------------------------------------------------------------------- #
+class TestAlignFireStartForRoof:
+    FIRE_MS = 5 * 60 * 1000      # 5 min
+    REST_MS = 25 * 60 * 1000     # 25 min  -> 30-min grid
+
+    def _app(self, roof_auto=True, safety=True, roof_state="N/A", preopen=15.0):
+        app = make_app()
+        app.roof_auto_sched_var = _PFVar(roof_auto)
+        app._is_safety_fire_enabled = lambda: safety
+        app._get_roof_status_cached = lambda: roof_state
+        app.roof_preopen_sec = preopen
+        return app
+
+    def _win(self, day=(2026, 10, 5)):
+        from datetime import datetime
+        s = datetime(*day, 0, 25, tzinfo=L.TZ)
+        e = datetime(*day, 23, 45, tzinfo=L.TZ)
+        return s, e
+
+    def test_start_inside_fire_slot_shifts_to_next_slot(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # สล็อตยิง 12:55-13:00; กดเริ่ม 12:56 (อยู่ในช่วง fire)
+        aligned = app._next_fire_time(datetime(2026,10,5,12,56,tzinfo=L.TZ), s, e,
+                                      self.FIRE_MS, self.REST_MS)
+        assert aligned == datetime(2026,10,5,12,55,tzinfo=L.TZ)   # ของเดิม = อดีต
+        out = app._align_fire_start_for_roof(aligned, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == datetime(2026,10,5,13,25,tzinfo=L.TZ)       # เลื่อนไปสล็อตถัดไป
+
+    def test_enough_lead_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # ยิง 13:25, now 13:00 -> เหลือ 25 นาที เปิดหลังคาทัน ไม่ต้องเลื่อน
+        s_dt = datetime(2026,10,5,13,25,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,13,0,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_roof_already_on_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(roof_state="ON")
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt        # หลังคาเปิดอยู่แล้ว ยิงรอบนี้ได้เลย
+
+    def test_auto_roof_off_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(roof_auto=False)
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_safety_off_keeps_same_slot(self):
+        from datetime import datetime
+        app = self._app(safety=False)
+        s, e = self._win()
+        s_dt = datetime(2026,10,5,12,55,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(s_dt, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,12,56,tzinfo=L.TZ))
+        assert out == s_dt
+
+    def test_no_slot_left_returns_none(self):
+        from datetime import datetime
+        app = self._app()
+        s, e = self._win()
+        # กดเริ่มใกล้ปิดหน้าต่างมาก (สล็อตสุดท้าย 23:25-23:30) เปิดหลังคาไม่ทัน
+        last = datetime(2026,10,5,23,25,tzinfo=L.TZ)
+        out = app._align_fire_start_for_roof(last, e, self.FIRE_MS, self.REST_MS,
+                                             datetime(2026,10,5,23,24,50,tzinfo=L.TZ))
+        assert out is None        # เลื่อนแล้วเกิน e_dt -> ไม่มีรอบที่ทัน
+
+
+# --------------------------------------------------------------------- #
+#  Safety alert (roof closed during fire) must bypass the popup cooldown
+# --------------------------------------------------------------------- #
+class TestRoofPopupCooldownBypass:
+    def _app(self):
+        app = make_app()
+        app._is_safety_fire_enabled = lambda: True
+        app.logs = []
+        app.log = lambda m: app.logs.append(str(m))
+        # ต้องตั้งค่าไว้ (App สืบทอด tk.Tk → __getattr__ วนซ้ำถ้า attribute ไม่มีจริง)
+        app._roof_popup_ts = 0.0
+        app._roof_popup_win = None
+        # Toplevel สร้างไม่ได้บน bare object -> ฟังก์ชัน except แล้ว return
+        # เราวัดพฤติกรรม cooldown ก่อนถึงส่วนสร้างหน้าต่างเท่านั้น
+        return app
+
+    def _suppressed(self, app):
+        return sum(1 for m in app.logs if "suppressed (cooldown)" in m)
+
+    def test_second_normal_popup_is_suppressed(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._show_roof_popup("m2", cooldown_sec=30.0)   # ภายใน cooldown
+        assert self._suppressed(app) == 1
+
+    def test_force_bypasses_cooldown(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._show_roof_popup("safety", cooldown_sec=10.0, force=True)  # ต้องไม่ถูกกลืน
+        assert self._suppressed(app) == 0
+
+    def test_warn_roof_force_passes_through(self):
+        app = self._app()
+        app._show_roof_popup("m1", cooldown_sec=30.0)
+        app._warn_roof("Roof Closed!", "during fire", force=True)
+        assert self._suppressed(app) == 0
