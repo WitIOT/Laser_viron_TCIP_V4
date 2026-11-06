@@ -728,3 +728,55 @@ class Test24HMode:
         n = L.FireRestScheduler.count_fire_cycles(
             s, e, timedelta(minutes=5), timedelta(minutes=25))
         assert n == 48
+
+
+# --------------------------------------------------------------------- #
+#  Prefire auto-open retry (roof takes ~8-9s; retry if it doesn't open)
+# --------------------------------------------------------------------- #
+class _PFVar:
+    def __init__(self, v): self._v = v
+    def get(self): return self._v
+
+class TestPrefireOpenRetry:
+    def _app(self, wait_seq):
+        import Laser_Rev13 as _L
+        app = make_app()
+        app.roof_auto_sched_var = _PFVar(True)
+        app._is_program_active = lambda i: True
+        app.is_raining_now = lambda: False
+        app._is_safety_fire_enabled = lambda: True
+        app.roof_preopen_sec = 0.1
+        app.roof_move_sec = 0.0
+        app.roof_open_retries = 3
+        app.opens = []
+        app._external_on = lambda: app.opens.append(1)
+        app.warns = []
+        app._warn_roof = lambda *x, **k: app.warns.append(x)
+        seq = list(wait_seq)
+        app._wait_roof_on = lambda **k: (seq.pop(0) if seq else True)
+        return app
+
+    def _run(self, app):
+        from datetime import timedelta
+        import Laser_Rev13 as _L
+        app._schedule_prefire_api(0, _L.datetime.now(_L.TZ) + timedelta(seconds=0.1))
+        wait_for(lambda: not (app._prefire_timers.get(0) and
+                              app._prefire_timers[0].is_alive()), timeout=2.0)
+
+    def test_open_succeeds_first_try(self):
+        app = self._app([True])
+        self._run(app)
+        assert len(app.opens) == 1
+        assert app.warns == []
+
+    def test_retries_until_open(self):
+        app = self._app([False, False, True])
+        self._run(app)
+        assert len(app.opens) == 3        # retried the POST until it opened
+        assert app.warns == []
+
+    def test_warns_after_all_retries_fail(self):
+        app = self._app([False, False, False])
+        self._run(app)
+        assert len(app.opens) == 3        # tried roof_open_retries times
+        assert len(app.warns) == 1        # then warned (non-blocking)

@@ -706,6 +706,8 @@ class App(tk.Tk):
         self.roof_auto_ctrl_var = tk.BooleanVar(value=True)  # เปิดอัตโนมัติ/ปิดตามสถานะเลเซอร์
         self.roof_preopen_sec = 15  # เปิดก่อน FIRE กี่วินาที
         self.roof_postclose_sec = 3  # ปิดหลัง REST กี่วินาที
+        self.roof_move_sec = 9.0    # เวลาหลังคาเคลื่อนเปิด/ปิดจริง ~8-9 วิ (ใช้คิด retry)
+        self.roof_open_retries = 3  # จำนวนครั้งที่ลองเปิดหลังคาใน prefire ถ้ายังไม่เปิด
 
         # --- Monday warmup logic ---
         self.monday_warmup_enabled_var = tk.BooleanVar(value=False)
@@ -5327,6 +5329,8 @@ class App(tk.Tk):
                 "monday_warmup_threshold": float(self.monday_warmup_threshold_var.get()),
                 "prefire_open_sec": float(getattr(self, "roof_preopen_sec", 15)),
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
+                "roof_move_sec": float(getattr(self, "roof_move_sec", 9.0)),
+                "roof_open_retries": int(getattr(self, "roof_open_retries", 3)),
                 "datalog_enabled": bool(getattr(self, "datalog_enabled", True)),
                 "datalog_interval": int(getattr(self, "datalog_interval", 300)),
                 "datalog_dir": getattr(self, "datalog_dir", ""),
@@ -5407,6 +5411,8 @@ class App(tk.Tk):
             )
             self.roof_preopen_sec = float(data.get("prefire_open_sec", getattr(self, "roof_preopen_sec", 15)))
             self.roof_postclose_sec = float(data.get("postrest_close_sec", getattr(self, "roof_postclose_sec", 3)))
+            self.roof_move_sec = float(data.get("roof_move_sec", getattr(self, "roof_move_sec", 9.0)))
+            self.roof_open_retries = int(data.get("roof_open_retries", getattr(self, "roof_open_retries", 3)))
 
             # Data logger settings
             self.datalog_enabled = bool(data.get("datalog_enabled", getattr(self, "datalog_enabled", True)))
@@ -5793,29 +5799,49 @@ class App(tk.Tk):
                 self._sched_log(idx, "⛔ prefire ยกเลิก: ฝนตก → ไม่เปิดหลังคา")
                 return
 
-            if self.roof_auto_sched_var.get():
-                self._external_on()
-
+            # Safety off → ไม่บังคับ/ไม่รอ roof (เปิดให้ครั้งเดียวพอ)
             if not self._is_safety_fire_enabled():
+                if self.roof_auto_sched_var.get():
+                    self._external_on()
                 self.log("Safety Fire = OFF: Roof not ON (prefire popup suppressed, allow firing)")
                 return
-        
-            if not self._wait_roof_on(timeout=12.0, interval=0.5):
-                def _warn():
-                    try:
-                        self._warn_roof(
-                            "Roof Closed!",
-                            "Roof closed during laser firing.\nThe laser was stopped for safety."
-                            )
-                    except Exception:
-                        pass
 
+            # เปิดหลังคา + รอให้ 'เปิดจริง' (หลังคาเคลื่อน ~8-9 วิ) พร้อม retry
+            # กันกรณี POST /door/open พลาดชั่วคราว หรือหลังคาเปิดช้ากว่าปกติ
+            move_sec = float(getattr(self, "roof_move_sec", 9.0))
+            per_wait = move_sec + 4.0          # margin + เวลา roof-poll อัปเดต cache
+            max_attempts = int(getattr(self, "roof_open_retries", 3))
+            opened = False
+            for attempt in range(1, max_attempts + 1):
+                # เลิกถ้าโปรแกรมหยุด/ฝนตกระหว่าง retry
+                if not self._is_program_active(idx):
+                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: โปรแกรมหยุดแล้ว")
+                    return
+                if self.is_raining_now():
+                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: ฝนตก")
+                    return
+                if self.roof_auto_sched_var.get():
+                    self._external_on()        # POST เปิดหลังคา (ลองเปิดซ้ำได้ — idempotent)
+                if self._wait_roof_on(timeout=per_wait, interval=0.5):
+                    opened = True
+                    if attempt > 1:
+                        self._sched_log(idx, f"✅ prefire: หลังคาเปิดสำเร็จ (retry ครั้งที่ {attempt})")
+                    break
+                self._sched_log(
+                    idx,
+                    f"prefire: หลังคายังไม่เปิดใน {per_wait:.0f}s "
+                    f"(ครั้งที่ {attempt}/{max_attempts}) → ลองเปิดใหม่")
+
+            if not opened:
+                # ครบ retry แล้วยังไม่เปิด → เตือน (non-blocking) + ปล่อยให้ guard บล็อกการยิง
                 try:
-                    self.after(0, _warn)
+                    self.after(0, lambda: self._warn_roof(
+                        "Roof Closed!",
+                        "Auto-open failed: the roof did not open in time after retries.\n"
+                        "Firing is blocked until the roof is ON."))
                 except Exception:
                     pass
-
-                self.log("❌ ยกเลิกการยิงอัตโนมัติ: Roof ไม่เปิดตามกำหนดเวลา")
+                self.log("❌ auto-open ล้มเหลวหลัง retry — หลังคาไม่เปิดตามกำหนด")
                 return
 
         t = threading.Timer(delay, _go)
