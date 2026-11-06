@@ -278,10 +278,10 @@ class TestFireGuardSuppressedDuringRain:
         app._get_roof_status_cached = lambda: state
         app.is_raining_now = lambda: raining
         app._apply_roof_status = lambda *a, **k: None
-        # รัน callback ของ after ทันที เพื่อให้ _warn (ถ้ามี) ถูกเรียกจริง
+        # รัน callback ของ after ทันที เพื่อให้ popup (ถ้ามี) ถูกเรียกจริง
         app.after = lambda ms, fn=None, *a: (fn() if callable(fn) else None)
-        monkeypatch.setattr(L.messagebox, "showwarning",
-                            lambda *a, **k: warned.append(a))
+        # popup เป็น non-blocking ผ่าน _show_roof_popup → stub เพื่อตรวจว่าถูกเรียกไหม
+        app._show_roof_popup = lambda *a, **k: warned.append(a)
         return app
 
     def test_no_popup_when_roof_closed_during_rain(self, monkeypatch):

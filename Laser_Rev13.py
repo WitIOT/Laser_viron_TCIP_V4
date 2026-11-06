@@ -6553,14 +6553,11 @@ class App(tk.Tk):
                 self.log(f"Fire blocked: Roof {state} ขณะฝนตก (popup suppressed)")
                 return False
 
-            # เตือนผ่าน main thread เท่านั้น
-            def _warn():
-                messagebox.showwarning(
-                    "Roof Closed",
-                    "Laser firing is blocked.\nRoof status (DI1) = %s.\n\nPlease open the roof (Roof = ON)." % state
-                )
+            # เตือนผ่าน main thread — ใช้ popup non-blocking (ไม่บล็อก event loop)
             try:
-                self.after(0, _warn)
+                self.after(0, lambda s=state: self._show_roof_popup(
+                    "Laser firing is blocked.\nRoof status (DI1) = %s.\n\n"
+                    "Please open the roof (Roof = ON)." % s))
             except Exception:
                 pass
 
@@ -6673,42 +6670,88 @@ class App(tk.Tk):
         except Exception:
             return "N/A"
 
-    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0):
-        """เตือนเรื่อง roof โดยเคารพ Safety Fire + ใส่วันเวลา + กัน popup ซ้ำถี่ ๆ"""
-
-        # ปิด safety => ไม่ต้องเตือน
+    def _show_roof_popup(self, message: str, title: str = "Roof Closed",
+                         cooldown_sec: float = 30.0):
+        """เตือนเรื่อง Roof แบบ NON-BLOCKING (singleton + auto-dismiss + cooldown)
+        ❗ แทน messagebox.showwarning (modal) ที่บล็อก/ซ้อน event loop — ซึ่งทำให้
+        การ poll สถานะหลังคาหยุด cache ค้าง และ prefire/guard ล้มต่อเนื่องเป็น cascade
+        ต้องเรียกบน main thread (สร้าง Tk widget)
+        """
         if not self._is_safety_fire_enabled():
             return
-
-        import time
-        from datetime import datetime
-
-        # cooldown กันเด้งถี่
-        now_ts = time.time()
-        last = getattr(self, "_last_roof_warn_ts", 0.0)
+        # cooldown กันเด้งถี่ (เช่น ยิงถูกบล็อกทุก 30 นาที — แต่กันเผื่อ burst)
+        now_ts = time.monotonic()
+        last = getattr(self, "_roof_popup_ts", 0.0)
         if (now_ts - last) < cooldown_sec:
+            self.log("Roof warning suppressed (cooldown)")
             return
-        self._last_roof_warn_ts = now_ts
+        self._roof_popup_ts = now_ts
 
-        # เวลา ณ ตอนตรวจพบ (พยายามใช้ TZ ของแอป ถ้ามี)
+        # singleton — ปิดอันเก่าก่อน (ไม่ stack)
+        old = getattr(self, "_roof_popup_win", None)
+        if old is not None:
+            try:
+                if old.winfo_exists():
+                    old.destroy()
+            except Exception:
+                pass
+        self._roof_popup_win = None
+
+        ts_text = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S") + " (UTC+7)"
         try:
-            tz = getattr(self, "TZ", None)  # ถ้าคุณมีตัวแปร TZ อยู่ในคลาส
-            dt = datetime.now(tz) if tz else datetime.now()
-            ts_text = dt.strftime("%Y-%m-%d %H:%M:%S")
-            if tz:
-                # ถ้า TZ มีอยู่ โดยทั่วไปคุณแสดง (UTC+7) อยู่แล้ว
-                ts_text += " (UTC+7)"
+            win = tk.Toplevel(self)
         except Exception:
-            ts_text = ""
+            return
+        self._roof_popup_win = win
+        win.title(title)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.geometry("420x210+140+140")
 
-        msg = message
-        if ts_text:
-            msg = f"{message}\n\nDetected at: {ts_text}"
+        frm = tk.Frame(win, bg="#7a1f1f", padx=16, pady=14)
+        frm.pack(fill="both", expand=True)
+        tk.Label(frm, text="⚠  " + title, font=("Segoe UI", 14, "bold"),
+                 fg="white", bg="#7a1f1f").pack(anchor="w", pady=(0, 6))
+        tk.Label(frm, text=f"{message}\n\nDetected at: {ts_text}",
+                 font=("Segoe UI", 9), fg="white", bg="#7a1f1f",
+                 justify="left").pack(anchor="w")
 
-        try:
-            messagebox.showwarning(title, msg)
-        except Exception:
-            pass
+        _AUTO = 20
+        cv = tk.StringVar(value=f"Auto-close in {_AUTO}s")
+        tk.Label(frm, textvariable=cv, font=("Segoe UI", 8),
+                 fg="#ffcccc", bg="#7a1f1f").pack(anchor="e", pady=(8, 0))
+
+        def _close():
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except Exception:
+                pass
+            if getattr(self, "_roof_popup_win", None) is win:
+                self._roof_popup_win = None
+
+        tk.Button(frm, text="OK", width=10, command=_close,
+                  cursor="hand2").pack(anchor="e", pady=(4, 0))
+        win.protocol("WM_DELETE_WINDOW", _close)
+
+        rem = [_AUTO]
+        def _tick():
+            try:
+                if not win.winfo_exists():
+                    return
+                rem[0] -= 1
+                if rem[0] <= 0:
+                    _close()
+                    return
+                cv.set(f"Auto-close in {rem[0]}s")
+                self.after(1000, _tick)
+            except Exception:
+                pass
+        self.after(1000, _tick)
+
+    def _warn_roof(self, title: str, message: str, cooldown_sec: float = 10.0):
+        """เตือนเรื่อง roof — ใช้ popup non-blocking (เดิมใช้ messagebox modal)"""
+        self._show_roof_popup(message, title=title, cooldown_sec=cooldown_sec)
 
     def _patch_messagebox_with_timestamp(self):
         """Append timestamp to all messageboxes (once)."""
