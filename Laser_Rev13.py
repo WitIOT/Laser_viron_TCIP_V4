@@ -665,9 +665,16 @@ class App(tk.Tk):
         self._datalog_status_var  = tk.StringVar(value="-")
 
         # --- Event log (JSON Lines): บันทึก Schedule/program events รายวัน ---
+        # เขียนไฟล์บน background thread เท่านั้น — log()/_sched_log() แค่ enqueue
+        # (ห้ามทำ file I/O บน main thread เพราะจะทำให้ Tk event loop ค้าง)
         self.schedlog_enabled = True
         self._schedlog_lock   = threading.Lock()
+        self._schedlog_q      = queue.Queue()
+        self._schedlog_stop   = threading.Event()
         self.schedlog_enabled_var = tk.BooleanVar(value=self.schedlog_enabled)
+        self._schedlog_thread = threading.Thread(
+            target=self._schedlog_writer_loop, daemon=True, name="SchedLogWriter")
+        self._schedlog_thread.start()
         self._datalog_last_var    = tk.StringVar(value="Data Logger: starting…")  # indicator หน้า Main
 
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
@@ -4409,24 +4416,46 @@ class App(tk.Tk):
     def clear_sched_terminal(self): self.sched_log_text.delete("1.0", tk.END)
 
     def _event_log_json(self, src: str, msg: str, program=None):
-        """บันทึก event ลงไฟล์ JSON Lines รายวัน (schedule_YYYYMMDD.jsonl)
-        thread-safe (lock + append) และเงียบเสมอเมื่อ error (กัน recursion กับ log())"""
+        """คิว event ลงไฟล์ JSON Lines รายวัน (schedule_YYYYMMDD.jsonl)
+        เรียกจาก log()/_sched_log() ได้ทุก thread — ทำแค่ enqueue (ไม่มี file I/O)
+        จึงไม่บล็อก Tk event loop; การเขียนไฟล์จริงอยู่บน _schedlog_writer_loop()
+        เงียบเสมอเมื่อ error (กัน recursion กับ log())"""
         if not getattr(self, "schedlog_enabled", True):
             return
         try:
-            d = self._datalog_dir()
-            os.makedirs(d, exist_ok=True)
-            path = os.path.join(d, f"schedule_{datetime.now(TZ).strftime('%Y%m%d')}.jsonl")
             rec = {"ts": datetime.now(TZ).isoformat(timespec="seconds"),
                    "src": src, "msg": str(msg)}
             if program is not None:
                 rec["program"] = program
+            self._schedlog_q.put_nowait(rec)
+        except Exception:
+            pass
+
+    def _schedlog_write_record(self, rec: dict):
+        """เขียน record เดียวลงไฟล์ JSONL (บล็อก I/O — ต้องเรียกบน writer thread เท่านั้น)"""
+        try:
+            d = self._datalog_dir()
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"schedule_{datetime.now(TZ).strftime('%Y%m%d')}.jsonl")
             line = json.dumps(rec, ensure_ascii=False)
             with self._schedlog_lock:
                 with open(path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
         except Exception:
             pass
+
+    def _schedlog_writer_loop(self):
+        """background thread: ดึง record จากคิวแล้วเขียนไฟล์ทีละรายการ
+        สั่งหยุดด้วยการ put(None) (sentinel) ใน on_close — จะ flush คิวที่ค้างให้หมดก่อน"""
+        q = self._schedlog_q
+        while True:
+            try:
+                rec = q.get()
+            except Exception:
+                continue
+            if rec is None:          # sentinel = ปิดโปรแกรม
+                break
+            self._schedlog_write_record(rec)
 
     def log(self, msg: str):
         stamp = datetime.now(TZ).strftime("%H:%M:%S")
@@ -5960,6 +5989,12 @@ class App(tk.Tk):
             # หยุด data logger + ปล่อยล็อกไฟล์
             self._datalog_stop.set()
             self._datalog_close()
+            # flush event log ที่ค้างในคิวแล้วหยุด writer thread
+            try:
+                self._schedlog_stop.set()
+                self._schedlog_q.put_nowait(None)
+            except Exception:
+                pass
             if self.laser: self.laser.close()
         except Exception:
             pass

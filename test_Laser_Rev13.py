@@ -792,8 +792,21 @@ class TestEventLogJson:
         app = make_app()
         app.schedlog_enabled = True
         app._schedlog_lock = threading.Lock()
+        app._schedlog_q = queue.Queue()
         app._datalog_dir = lambda: str(tmpdir)
         return app
+
+    def _drain(self, app):
+        """จำลอง writer thread: ดึงทุก record ในคิวมาเขียนไฟล์แบบ synchronous"""
+        import queue as _q
+        while True:
+            try:
+                rec = app._schedlog_q.get_nowait()
+            except _q.Empty:
+                break
+            if rec is None:
+                break
+            app._schedlog_write_record(rec)
 
     def _read_lines(self, tmpdir):
         import glob, os, json
@@ -805,6 +818,7 @@ class TestEventLogJson:
     def test_writes_jsonl_record(self, tmp_path):
         app = self._app(tmp_path)
         app._event_log_json("sched", "fire start", program=2)
+        self._drain(app)
         recs = self._read_lines(tmp_path)
         assert len(recs) == 1
         assert recs[0]["src"] == "sched"
@@ -816,19 +830,27 @@ class TestEventLogJson:
         app = self._app(tmp_path)
         app._event_log_json("app", "one")
         app._event_log_json("app", "two")
+        self._drain(app)
         recs = self._read_lines(tmp_path)
         assert [r["msg"] for r in recs] == ["one", "two"]
         assert "program" not in recs[0]
 
-    def test_disabled_writes_nothing(self, tmp_path):
-        import glob, os
+    def test_disabled_enqueues_nothing(self, tmp_path):
         app = self._app(tmp_path)
         app.schedlog_enabled = False
         app._event_log_json("app", "ignored")
-        assert glob.glob(os.path.join(str(tmp_path), "schedule_*.jsonl")) == []
+        assert app._schedlog_q.empty()      # ไม่ถูกคิว → ไม่มีการเขียน
 
-    def test_errors_are_silent(self, tmp_path):
+    def test_enqueue_never_does_io(self, tmp_path):
+        import glob, os
+        # ถึง _datalog_dir จะพัง ช่วง enqueue ก็ต้องไม่เรียก I/O/ไม่ raise
         app = self._app(tmp_path)
         app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
-        # must not raise
+        app._event_log_json("app", "x")     # enqueue only — must not touch disk/raise
+        assert glob.glob(os.path.join(str(tmp_path), "schedule_*.jsonl")) == []
+
+    def test_write_errors_are_silent(self, tmp_path):
+        app = self._app(tmp_path)
         app._event_log_json("app", "x")
+        app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        self._drain(app)                    # writer must swallow the error
