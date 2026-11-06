@@ -707,7 +707,7 @@ class App(tk.Tk):
         self.roof_preopen_sec = 15  # เปิดก่อน FIRE กี่วินาที
         self.roof_postclose_sec = 3  # ปิดหลัง REST กี่วินาที
         self.roof_move_sec = 9.0    # เวลาหลังคาเคลื่อนเปิด/ปิดจริง ~8-9 วิ (ใช้คิด retry)
-        self.roof_open_retries = 3  # จำนวนครั้งที่ลองเปิดหลังคาใน prefire ถ้ายังไม่เปิด
+        self.roof_open_retries = 2  # จำนวนครั้งที่ลองเปิดหลังคาใน prefire ถ้ายังไม่เปิด
 
         # --- Monday warmup logic ---
         self.monday_warmup_enabled_var = tk.BooleanVar(value=False)
@@ -1189,14 +1189,8 @@ class App(tk.Tk):
         self._ui_refs["roof_close_btn"] = btn_roof_close
         self._ui_refs["roof_status_lbl"] = self.roof_status_lbl
 
-        self.roof_auto_sched_cb = ttk.Checkbutton(
-            frm_roof,
-            text="Enable auto open (T-15s) / auto close (+3s)",
-            variable=self.roof_auto_sched_var,
-        )
-        self.roof_auto_sched_cb.pack(side=tk.RIGHT, padx=6)
-        self._update_roof_auto_label()
-        self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
+        # หมายเหตุ: checkbox "Enable auto open/close" ย้ายไปแท็บ Settings/Config แล้ว
+        # (ดู _build_config_tab → กรอบ Sliding Roof Timing)
 
         # self.roof_auto_var = tk.BooleanVar(value=True)
         # ttk.Checkbutton(frm_roof, text="Auto-refresh (5s)",
@@ -1453,6 +1447,16 @@ class App(tk.Tk):
 
         ttk.Label(roof_lf, text="Used by auto open/close around FIRE/REST", foreground="gray")\
             .grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
+
+        # Auto open/close toggle (ย้ายมาจากหน้า Main)
+        self.roof_auto_sched_cb = ttk.Checkbutton(
+            roof_lf,
+            text="Enable auto open (T-15s) / auto close (+3s)",
+            variable=self.roof_auto_sched_var,
+        )
+        self.roof_auto_sched_cb.grid(row=5, column=0, columnspan=2, sticky="w", padx=6, pady=(2, 6))
+        self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
+        self._update_roof_auto_label()
 
         # ---- [RIGHT COL 1] Logs & System Settings ----
         logs_lf = ttk.LabelFrame(parent, text="Logs & System Settings")
@@ -2884,12 +2888,13 @@ class App(tk.Tk):
                       "• ฝนตก → ปิดหลังคา + หยุดโปรแกรมอัตโนมัติ"),
              "widget": "roof_frame", "on_show": show_after_temp, "shape": R},
 
-            {"title": "8.1 เปิด/ปิดหลังคาอัตโนมัติ",
-             "body": ("ติ๊ก 'Enable auto open/close' ให้ระบบจัดการเอง:\n"
+            {"title": "8.1 เปิด/ปิดหลังคาอัตโนมัติ (ในแท็บ Settings)",
+             "body": ("ไปที่แท็บ Settings/Config → กรอบ Roof Settings\n"
+                      "ติ๊ก 'Enable auto open/close' ให้ระบบจัดการเอง:\n"
                       "• เปิดก่อนถึงเวลายิง (Pre-open lead)\n"
                       "• ปิดหลังพัก (Post-close delay)\n"
                       "เหมาะกับรันโปรแกรมยาว"),
-             "widget": "roof_auto_cb", "on_show": main},
+             "widget": "roof_auto_cb", "on_show": cfg, "shape": R},
 
             {"title": "9. โปรแกรมยิงอัตโนมัติ",
              "body": ("ตั้งเวลายิงเป็นรอบ FIRE/REST อัตโนมัติ\n"
