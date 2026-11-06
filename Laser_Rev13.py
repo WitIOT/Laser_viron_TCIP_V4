@@ -663,6 +663,11 @@ class App(tk.Tk):
         self.datalog_interval_var = tk.IntVar(value=self.datalog_interval)
         self.datalog_dir_var      = tk.StringVar(value=self.datalog_dir)
         self._datalog_status_var  = tk.StringVar(value="-")
+
+        # --- Event log (JSON Lines): บันทึก Schedule/program events รายวัน ---
+        self.schedlog_enabled = True
+        self._schedlog_lock   = threading.Lock()
+        self.schedlog_enabled_var = tk.BooleanVar(value=self.schedlog_enabled)
         self._datalog_last_var    = tk.StringVar(value="Data Logger: starting…")  # indicator หน้า Main
 
         # --- Rain sensor UI variables (ประกาศก่อน _build_ui) ---
@@ -1549,6 +1554,26 @@ class App(tk.Tk):
                        "ขณะบันทึก คนอื่นเปิดอ่านได้แต่แก้ไข/ลบไม่ได้ จนกว่าจะปิดโปรแกรม",
                   foreground="gray", justify="left").grid(
             row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
+
+        ttk.Separator(dlog_lf, orient="horizontal").grid(
+            row=6, column=0, columnspan=3, sticky="we", padx=6, pady=(2, 4))
+
+        def _toggle_schedlog():
+            try:
+                self.schedlog_enabled = bool(self.schedlog_enabled_var.get())
+            except Exception:
+                pass
+        self.schedlog_enabled_cb = ttk.Checkbutton(
+            dlog_lf,
+            text="บันทึก Schedule/Event logs เป็น JSON (schedule_YYYYMMDD.jsonl)",
+            variable=self.schedlog_enabled_var,
+            command=_toggle_schedlog)
+        self.schedlog_enabled_cb.grid(row=7, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 2))
+        self._ui_refs["cfg_schedlog_cb"] = self.schedlog_enabled_cb
+        ttk.Label(dlog_lf,
+                  text="บันทึกเหตุการณ์โปรแกรม/ตารางเวลาแบบ 1 บรรทัด = 1 เหตุการณ์ (ไว้ตรวจย้อนหลัง)",
+                  foreground="gray", justify="left").grid(
+            row=8, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         # ---- [LEFT COL 0] Temp & RH Sensor Settings ----
         sensor_lf = ttk.LabelFrame(parent, text="Temp & RH Sensor Settings")
@@ -4383,14 +4408,37 @@ class App(tk.Tk):
     def clear_terminal(self): self.log_text.delete("1.0", tk.END)
     def clear_sched_terminal(self): self.sched_log_text.delete("1.0", tk.END)
 
+    def _event_log_json(self, src: str, msg: str, program=None):
+        """บันทึก event ลงไฟล์ JSON Lines รายวัน (schedule_YYYYMMDD.jsonl)
+        thread-safe (lock + append) และเงียบเสมอเมื่อ error (กัน recursion กับ log())"""
+        if not getattr(self, "schedlog_enabled", True):
+            return
+        try:
+            d = self._datalog_dir()
+            os.makedirs(d, exist_ok=True)
+            path = os.path.join(d, f"schedule_{datetime.now(TZ).strftime('%Y%m%d')}.jsonl")
+            rec = {"ts": datetime.now(TZ).isoformat(timespec="seconds"),
+                   "src": src, "msg": str(msg)}
+            if program is not None:
+                rec["program"] = program
+            line = json.dumps(rec, ensure_ascii=False)
+            with self._schedlog_lock:
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except Exception:
+            pass
+
     def log(self, msg: str):
         stamp = datetime.now(TZ).strftime("%H:%M:%S")
         self.msg_q.put(f"[{stamp}] {msg}")
+        self._event_log_json("app", msg)
 
     def _sched_log(self, idx, msg: str):
         stamp = datetime.now(TZ).strftime("%H:%M:%S")
         label = f"SCHED#{idx+1}" if idx is not None else "SCHED"
         self.msg_q.put(f"[{label}] [{stamp}] {msg}")
+        self._event_log_json("sched", msg,
+                             program=(idx + 1 if idx is not None else None))
 
     def _drain_logs(self):
         try:
@@ -5336,6 +5384,7 @@ class App(tk.Tk):
                 "postrest_close_sec": float(getattr(self, "roof_postclose_sec", 3)),
                 "roof_move_sec": float(getattr(self, "roof_move_sec", 9.0)),
                 "roof_open_retries": int(getattr(self, "roof_open_retries", 3)),
+                "schedlog_enabled": bool(self.schedlog_enabled_var.get()) if hasattr(self, "schedlog_enabled_var") else bool(getattr(self, "schedlog_enabled", True)),
                 "datalog_enabled": bool(getattr(self, "datalog_enabled", True)),
                 "datalog_interval": int(getattr(self, "datalog_interval", 300)),
                 "datalog_dir": getattr(self, "datalog_dir", ""),
@@ -5418,6 +5467,12 @@ class App(tk.Tk):
             self.roof_postclose_sec = float(data.get("postrest_close_sec", getattr(self, "roof_postclose_sec", 3)))
             self.roof_move_sec = float(data.get("roof_move_sec", getattr(self, "roof_move_sec", 9.0)))
             self.roof_open_retries = int(data.get("roof_open_retries", getattr(self, "roof_open_retries", 3)))
+            self.schedlog_enabled = bool(data.get("schedlog_enabled", getattr(self, "schedlog_enabled", True)))
+            if hasattr(self, "schedlog_enabled_var"):
+                try:
+                    self.schedlog_enabled_var.set(self.schedlog_enabled)
+                except Exception:
+                    pass
 
             # Data logger settings
             self.datalog_enabled = bool(data.get("datalog_enabled", getattr(self, "datalog_enabled", True)))

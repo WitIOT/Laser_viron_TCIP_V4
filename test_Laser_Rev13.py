@@ -752,6 +752,8 @@ class TestPrefireOpenRetry:
         app._external_on = lambda: app.opens.append(1)
         app.warns = []
         app._warn_roof = lambda *x, **k: app.warns.append(x)
+        app._sched_log = lambda i, m: None
+        app.schedlog_enabled = False
         seq = list(wait_seq)
         app._wait_roof_on = lambda **k: (seq.pop(0) if seq else True)
         return app
@@ -780,3 +782,53 @@ class TestPrefireOpenRetry:
         self._run(app)
         assert len(app.opens) == 3        # tried roof_open_retries times
         assert len(app.warns) == 1        # then warned (non-blocking)
+
+
+# --------------------------------------------------------------------- #
+#  Event log (JSON Lines): schedule_YYYYMMDD.jsonl
+# --------------------------------------------------------------------- #
+class TestEventLogJson:
+    def _app(self, tmpdir):
+        app = make_app()
+        app.schedlog_enabled = True
+        app._schedlog_lock = threading.Lock()
+        app._datalog_dir = lambda: str(tmpdir)
+        return app
+
+    def _read_lines(self, tmpdir):
+        import glob, os, json
+        files = glob.glob(os.path.join(str(tmpdir), "schedule_*.jsonl"))
+        assert len(files) == 1, f"expected 1 jsonl file, got {files}"
+        with open(files[0], encoding="utf-8") as f:
+            return [json.loads(x) for x in f if x.strip()]
+
+    def test_writes_jsonl_record(self, tmp_path):
+        app = self._app(tmp_path)
+        app._event_log_json("sched", "fire start", program=2)
+        recs = self._read_lines(tmp_path)
+        assert len(recs) == 1
+        assert recs[0]["src"] == "sched"
+        assert recs[0]["msg"] == "fire start"
+        assert recs[0]["program"] == 2
+        assert "ts" in recs[0]
+
+    def test_appends_multiple(self, tmp_path):
+        app = self._app(tmp_path)
+        app._event_log_json("app", "one")
+        app._event_log_json("app", "two")
+        recs = self._read_lines(tmp_path)
+        assert [r["msg"] for r in recs] == ["one", "two"]
+        assert "program" not in recs[0]
+
+    def test_disabled_writes_nothing(self, tmp_path):
+        import glob, os
+        app = self._app(tmp_path)
+        app.schedlog_enabled = False
+        app._event_log_json("app", "ignored")
+        assert glob.glob(os.path.join(str(tmp_path), "schedule_*.jsonl")) == []
+
+    def test_errors_are_silent(self, tmp_path):
+        app = self._app(tmp_path)
+        app._datalog_dir = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+        # must not raise
+        app._event_log_json("app", "x")
