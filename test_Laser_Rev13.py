@@ -783,6 +783,36 @@ class TestPrefireOpenRetry:
         assert len(app.opens) == 3        # tried roof_open_retries times
         assert len(app.warns) == 1        # then warned (non-blocking)
 
+    def test_no_warn_if_program_stopped_during_final_wait(self):
+        # กด Stop ระหว่างรอ _wait_roof_on รอบสุดท้าย → ต้องไม่เด้ง popup หลังหยุด
+        app = self._app([False, False, False])
+        active = [True]
+        app._is_program_active = lambda i: active[0]
+        calls = [0]
+        def _wait(**k):
+            calls[0] += 1
+            if calls[0] >= 3:        # ระหว่าง wait รอบสุดท้าย ผู้ใช้กด Stop
+                active[0] = False
+            return False
+        app._wait_roof_on = _wait
+        self._run(app)
+        assert app.warns == []        # ไม่เตือนเพราะโปรแกรมหยุดแล้ว
+
+    def test_no_warn_if_raining_after_retries(self):
+        # ฝนเริ่มตกช่วง retry → หลังคาปิดโดยตั้งใจ ไม่ควรเด้ง popup
+        app = self._app([False, False, False])
+        rain = [False]
+        app.is_raining_now = lambda: rain[0]
+        calls = [0]
+        def _wait(**k):
+            calls[0] += 1
+            if calls[0] >= 3:
+                rain[0] = True
+            return False
+        app._wait_roof_on = _wait
+        self._run(app)
+        assert app.warns == []
+
 
 # --------------------------------------------------------------------- #
 #  Event log (JSON Lines): schedule_YYYYMMDD.jsonl

@@ -5922,6 +5922,14 @@ class App(tk.Tk):
                     f"(ครั้งที่ {attempt}/{max_attempts}) → ลองเปิดใหม่")
 
             if not opened:
+                # ❗ โปรแกรมอาจถูก Stop/ฝนตก ระหว่างรอ _wait_roof_on รอบสุดท้าย
+                # ถ้าไม่ active แล้ว ห้ามเด้ง popup (กันการแจ้งเตือนค้างหลังหยุดโปรแกรม)
+                if not self._is_program_active(idx):
+                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ แต่โปรแกรมหยุดแล้ว → ไม่เตือน")
+                    return
+                if self.is_raining_now():
+                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ ขณะฝนตก (หลังคาปิดโดยตั้งใจ) → ไม่เตือน")
+                    return
                 # ครบ retry แล้วยังไม่เปิด → เตือน (non-blocking) + ปล่อยให้ guard บล็อกการยิง
                 try:
                     self.after(0, lambda: self._warn_roof(
