@@ -1043,6 +1043,21 @@ class TestWeatherStation:
         app.weather_api_base = "http://h:8000/api/cr300/"   # trailing slash
         assert app._weather_url("/latest") == "http://h:8000/api/cr300/latest"
 
+    def test_weather_url_root_host(self):
+        # เซิร์ฟเวอร์ที่เสิร์ฟ /live ตรง root (ไม่มี /api/cr300)
+        app = self._app()
+        app.weather_api_base = "http://192.168.3.77:8000"
+        assert app._weather_url("live") == "http://192.168.3.77:8000/live"
+
+    def test_weather_url_full_endpoint_pasted(self):
+        # ผู้ใช้วาง endpoint เต็ม .../live หรือ .../latest -> ต้องไม่ซ้ำ /live/live
+        app = self._app()
+        app.weather_api_base = "http://192.168.3.77:8000/live"
+        assert app._weather_url("live") == "http://192.168.3.77:8000/live"
+        assert app._weather_url("latest") == "http://192.168.3.77:8000/latest"  # stream เปลี่ยนได้
+        app.weather_api_base = "http://h:8000/api/cr300/latest"
+        assert app._weather_url("live") == "http://h:8000/api/cr300/live"
+
     def test_weather_url_empty_base(self):
         app = self._app()
         app.weather_api_base = ""

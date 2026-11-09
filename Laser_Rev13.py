@@ -1695,7 +1695,7 @@ class App(tk.Tk):
         ttk.Label(wx_lf, text="weather_api_base").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(wx_lf, textvariable=self.weather_api_base_var, width=50).grid(
             row=1, column=1, sticky="we", padx=6, pady=6)
-        ttk.Label(wx_lf, text="(e.g. http://192.168.3.150:8000/api/cr300)",
+        ttk.Label(wx_lf, text="(เช่น http://192.168.3.77:8000 หรือ .../api/cr300 — วาง .../live เต็มก็ได้)",
                   foreground="gray").grid(row=1, column=2, padx=6, sticky="w")
 
         ttk.Label(wx_lf, text="Stream").grid(row=2, column=0, sticky="w", padx=6, pady=6)
@@ -6616,10 +6616,22 @@ class App(tk.Tk):
     #  Weather Station (CR300) polling                                     #
     # ------------------------------------------------------------------ #
     def _weather_url(self, path: str) -> str:
-        """ประกอบ URL จาก base (ตัด / ท้ายออกกันซ้ำ)"""
+        """ประกอบ URL จาก base + stream path
+
+        รองรับได้ทั้ง:
+          - วาง base เปล่า      : http://host:8000/api/cr300  หรือ  http://host:8000
+          - วาง endpoint เต็ม   : http://host:8000/live  หรือ  .../api/cr300/latest
+        ถ้า base ลงท้ายด้วย /live หรือ /latest อยู่แล้ว จะตัดออกก่อนแล้วต่อ stream ที่เลือก
+        จึงไม่เกิด .../live/live
+        """
         base = (getattr(self, "weather_api_base", "") or "").strip().rstrip("/")
         if not base:
             return ""
+        low = base.lower()
+        for suf in ("/live", "/latest"):
+            if low.endswith(suf):
+                base = base[: -len(suf)].rstrip("/")
+                break
         return f"{base}/{path.lstrip('/')}"
 
     @staticmethod
