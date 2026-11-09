@@ -1004,3 +1004,99 @@ class TestRoofPopupCooldownBypass:
         app._show_roof_popup("m1", cooldown_sec=30.0)
         app._warn_roof("Roof Closed!", "during fire", force=True)
         assert self._suppressed(app) == 0
+
+
+# --------------------------------------------------------------------- #
+#  Weather Station (CR300) API -> UI mapping
+# --------------------------------------------------------------------- #
+class TestWeatherStation:
+    def _app(self):
+        app = make_app()
+        app.weather_api_base = "http://192.168.3.150:8000/api/cr300"
+        app._WX_FIELDS = L.WEATHER_FIELDS
+        app._wx_vars = {k: FakeVar("-") for k in L.WEATHER_FIELDS}
+        app._WX_API_ALIAS = {
+            "RecNbr": "RecNum", "BattV_Min": "BattV", "WindDir_D1_WVT": "WindDir",
+        }
+        return app
+
+    # ---- _wx_fmt ----
+    def test_fmt_float_trims(self):
+        assert L.App._wx_fmt(12.3708) == "12.37"
+        assert L.App._wx_fmt(26.5) == "26.5"
+        assert L.App._wx_fmt(0.0) == "0"
+        assert L.App._wx_fmt(5) == "5"
+
+    def test_fmt_numeric_string(self):
+        assert L.App._wx_fmt("12.3708") == "12.37"
+        assert L.App._wx_fmt("-8190") == "-8190"
+
+    def test_fmt_nonnumeric_and_none(self):
+        assert L.App._wx_fmt("ON") == "ON"
+        assert L.App._wx_fmt(None) == "-"
+        assert L.App._wx_fmt("") == "-"
+
+    # ---- _weather_url ----
+    def test_weather_url_join(self):
+        app = self._app()
+        assert app._weather_url("live") == "http://192.168.3.150:8000/api/cr300/live"
+        app.weather_api_base = "http://h:8000/api/cr300/"   # trailing slash
+        assert app._weather_url("/latest") == "http://h:8000/api/cr300/latest"
+
+    def test_weather_url_root_host(self):
+        # เซิร์ฟเวอร์ที่เสิร์ฟ /live ตรง root (ไม่มี /api/cr300)
+        app = self._app()
+        app.weather_api_base = "http://192.168.3.77:8000"
+        assert app._weather_url("live") == "http://192.168.3.77:8000/live"
+
+    def test_weather_url_full_endpoint_pasted(self):
+        # ผู้ใช้วาง endpoint เต็ม .../live หรือ .../latest -> ต้องไม่ซ้ำ /live/live
+        app = self._app()
+        app.weather_api_base = "http://192.168.3.77:8000/live"
+        assert app._weather_url("live") == "http://192.168.3.77:8000/live"
+        assert app._weather_url("latest") == "http://192.168.3.77:8000/latest"  # stream เปลี่ยนได้
+        app.weather_api_base = "http://h:8000/api/cr300/latest"
+        assert app._weather_url("live") == "http://h:8000/api/cr300/live"
+
+    def test_weather_url_empty_base(self):
+        app = self._app()
+        app.weather_api_base = ""
+        assert app._weather_url("live") == ""
+
+    # ---- _apply_weather_record ----
+    def test_apply_live_record(self):
+        app = self._app()
+        rec = {"station": "narit_cr300", "RecNbr": 2161,
+               "time_local": "2026-11-09 13:28:05",
+               "fields": {"BattV": 12.3708, "PTemp_C": 26.56, "Invalid_Wind": 0}}
+        n = app._apply_weather_record(rec)
+        assert app._wx_vars["RecNum"].get() == "2161"
+        assert app._wx_vars["TimeStamp"].get() == "2026-11-09 13:28:05"
+        assert app._wx_vars["BattV"].get() == "12.37"
+        assert app._wx_vars["PTemp_C"].get() == "26.56"
+        assert app._wx_vars["Invalid_Wind"].get() == "0"
+        assert app._wx_vars["AirT_C"].get() == "-"      # ไม่มี sensor -> คงเดิม
+        assert n >= 5
+
+    def test_apply_record_alias(self):
+        app = self._app()
+        rec = {"RecNbr": 1705, "time_local": "2026-11-09 13:00:00",
+               "fields": {"BattV_Min": 12.36, "WindDir_D1_WVT": 123.4}}
+        app._apply_weather_record(rec)
+        assert app._wx_vars["BattV"].get() == "12.36"     # BattV_Min -> BattV
+        assert app._wx_vars["WindDir"].get() == "123.4"   # WindDir_D1_WVT -> WindDir
+
+    def test_apply_record_flat_fields(self):
+        # record แบบ flat (ไม่มี key "fields") ก็ต้อง map ได้
+        app = self._app()
+        rec = {"RecNbr": 10, "TimeStamp": "2026-11-09 10:00:00",
+               "AirT_C": 25.0, "RH": 60.0}
+        app._apply_weather_record(rec)
+        assert app._wx_vars["RecNum"].get() == "10"
+        assert app._wx_vars["AirT_C"].get() == "25"
+        assert app._wx_vars["RH"].get() == "60"
+
+    def test_apply_bad_input_safe(self):
+        app = self._app()
+        assert app._apply_weather_record(None) == 0
+        assert app._apply_weather_record("nope") == 0

@@ -649,6 +649,23 @@ class App(tk.Tk):
         self._wx_status_var = tk.StringVar(value="Offline")
         self._wx_ts_var     = tk.StringVar(value="-")
 
+        # --- Weather Station (CR300) API config/state ---
+        self.weather_enabled        = True
+        self.weather_api_base       = "http://192.168.3.150:8000/api/cr300"
+        self.weather_api_timeout    = 5.0
+        self.weather_poll_interval  = 60       # วินาที (live stream ~60s)
+        self.weather_stale_sec      = 180.0    # เกินเท่านี้ไม่มีข้อมูลใหม่ → N/A
+        self.weather_stream         = "live"   # live | averaged
+        self._weather_poll_stop     = False
+        self._weather_poll_inflight = False
+        self._weather_last_ok_ts: float | None = None
+        # map ชื่อ field จาก API → ชื่อใน WEATHER_FIELDS (เฉพาะที่ชื่อไม่ตรงกัน)
+        self._WX_API_ALIAS = {
+            "RecNbr": "RecNum",
+            "BattV_Min": "BattV",          # averaged stream ใช้ BattV_Min
+            "WindDir_D1_WVT": "WindDir",   # averaged: ทิศลมเฉลี่ยแบบเวกเตอร์
+        }
+
         # --- Data Logger (CSV ต่อเนื่อง วันละ 1 ไฟล์ ล็อกไม่ให้คนอื่นแก้) ---
         self.datalog_enabled   = True
         self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
@@ -693,6 +710,13 @@ class App(tk.Tk):
         self.sensor_timeout_var    = tk.DoubleVar(value=self.sensor_api_timeout)
         self.sensor_interval_var   = tk.IntVar(value=self.sensor_poll_interval)
         self.sensor_stale_var      = tk.DoubleVar(value=self._sensor_stale_sec)
+        # Weather Station (CR300) UI vars
+        self.weather_enabled_var   = tk.BooleanVar(value=self.weather_enabled)
+        self.weather_api_base_var  = tk.StringVar(value=self.weather_api_base)
+        self.weather_timeout_var   = tk.DoubleVar(value=self.weather_api_timeout)
+        self.weather_interval_var  = tk.IntVar(value=self.weather_poll_interval)
+        self.weather_stale_var     = tk.DoubleVar(value=self.weather_stale_sec)
+        self.weather_stream_var    = tk.StringVar(value=self.weather_stream)
         # display vars
         self.sensor_in_temp_var    = tk.StringVar(value="-")
         self.sensor_in_humi_var    = tk.StringVar(value="-")
@@ -755,6 +779,9 @@ class App(tk.Tk):
         # Temp/RH sensor polling
         if getattr(self, 'sensor_enabled', True):
             self.after(2000, self._poll_sensor)
+        # Weather Station (CR300) polling
+        if getattr(self, 'weather_enabled', True):
+            self.after(2500, self._poll_weather)
 
         self._poll_roof_status()
         # self._monitor_roof_during_fire()
@@ -886,6 +913,7 @@ class App(tk.Tk):
             # หยุด network scan ที่อาจกำลังรันอยู่ (กัน callback หลังปิดหน้าต่าง)
             if hasattr(self, "_scan_stop_flag"):
                 self._scan_stop_flag.set()
+            self._weather_poll_stop = True
             self.stop_all_programs()
             self._stop_telemetry()
             self._datalog_stop.set()
@@ -1650,8 +1678,53 @@ class App(tk.Tk):
         ttk.Label(rain_timing, text="ความถี่ดึงข้อมูล (แนะนำ 1–5 วินาที)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
+        # ---- [FULL WIDTH row 4] Weather Station (CR300) Settings ----
+        wx_lf = ttk.LabelFrame(parent, text="Weather Station (CR300) Settings")
+        self._ui_refs["cfg_weather_frame"] = wx_lf
+        wx_lf.grid(row=4, column=0, columnspan=2, sticky="nwe", padx=10, pady=(0, 10))
+        wx_lf.columnconfigure(1, weight=1)
+
+        def _toggle_weather_from_settings():
+            self._apply_weather_enabled(bool(self.weather_enabled_var.get()))
+        ttk.Checkbutton(
+            wx_lf, text="Enable Weather Station",
+            variable=self.weather_enabled_var,
+            command=_toggle_weather_from_settings,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(8, 2))
+
+        ttk.Label(wx_lf, text="weather_api_base").grid(row=1, column=0, sticky="w", padx=6, pady=6)
+        ttk.Entry(wx_lf, textvariable=self.weather_api_base_var, width=50).grid(
+            row=1, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(wx_lf, text="(เช่น http://192.168.3.77:8000 หรือ .../api/cr300 — วาง .../live เต็มก็ได้)",
+                  foreground="gray").grid(row=1, column=2, padx=6, sticky="w")
+
+        ttk.Label(wx_lf, text="Stream").grid(row=2, column=0, sticky="w", padx=6, pady=6)
+        ttk.Combobox(wx_lf, textvariable=self.weather_stream_var, width=12, state="readonly",
+                     values=("live", "averaged")).grid(row=2, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(wx_lf, text="live = เรียลไทม์ ~60s · averaged = เฉลี่ยรายชั่วโมง",
+                  foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
+
+        wx_timing = ttk.LabelFrame(wx_lf, text="Weather Timing")
+        wx_timing.grid(row=3, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 6))
+        wx_timing.columnconfigure(2, weight=1)
+
+        ttk.Label(wx_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(wx_timing, textvariable=self.weather_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="HTTP timeout ต่อ request (แนะนำ 3–10)",
+                  foreground="gray").grid(row=0, column=2, sticky="w", padx=6)
+
+        ttk.Label(wx_timing, text="Poll interval (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(wx_timing, textvariable=self.weather_interval_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="ความถี่ดึงข้อมูล (live แนะนำ 30–60, averaged 300–600)",
+                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
+
+        ttk.Label(wx_timing, text="Stale threshold (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(wx_timing, textvariable=self.weather_stale_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="นานแค่ไหนก่อนแสดง Offline เมื่อไม่มีข้อมูลใหม่ (แนะนำ 180–600)",
+                  foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
+
         btns = ttk.Frame(parent)
-        btns.grid(row=3, column=1, sticky="se", padx=10, pady=(0, 10))
+        btns.grid(row=5, column=1, sticky="se", padx=10, pady=(0, 10))
         btn_cfg_save = ttk.Button(btns, text="Apply & Save", command=self._apply_and_save_config)
         btn_cfg_save.pack(side=tk.RIGHT, padx=4)
         self._ui_refs["config_save_btn"] = btn_cfg_save
@@ -2535,6 +2608,27 @@ class App(tk.Tk):
                 self.rain_poll_interval = max(1, int(self.rain_interval_var.get()))
             except Exception:
                 pass
+            # Weather Station (CR300)
+            self.weather_api_base = self.weather_api_base_var.get().strip()
+            self.weather_stream   = (self.weather_stream_var.get().strip() or "live")
+            try:
+                self.weather_api_timeout = max(0.5, float(self.weather_timeout_var.get()))
+            except Exception:
+                pass
+            try:
+                self.weather_poll_interval = max(5, int(self.weather_interval_var.get()))
+            except Exception:
+                pass
+            try:
+                self.weather_stale_sec = max(5.0, float(self.weather_stale_var.get()))
+            except Exception:
+                pass
+            # เปิด/ปิด poll ให้ครบ side-effect (เปลี่ยนสถานะเท่านั้นจึง restart)
+            _new_wx = bool(self.weather_enabled_var.get())
+            if _new_wx != bool(getattr(self, "weather_enabled", True)):
+                self._apply_weather_enabled(_new_wx)
+            else:
+                self.weather_enabled = _new_wx
             self.safety_fire_enabled = bool(self.safety_fire_enabled_var.get())
             self.monday_warmup_enabled = bool(self.monday_warmup_enabled_var.get())
 
@@ -5460,6 +5554,12 @@ class App(tk.Tk):
                 "rain_api_timeout":  float(getattr(self, "rain_api_timeout", 2.5)),
                 "rain_stale_sec":    float(getattr(self, "rain_stale_sec", 10.0)),
                 "rain_poll_interval": int(getattr(self, "rain_poll_interval", 1)),
+                "weather_enabled":      bool(getattr(self, "weather_enabled", True)),
+                "weather_api_base":     getattr(self, "weather_api_base", ""),
+                "weather_api_timeout":  float(getattr(self, "weather_api_timeout", 5.0)),
+                "weather_poll_interval": int(getattr(self, "weather_poll_interval", 60)),
+                "weather_stale_sec":    float(getattr(self, "weather_stale_sec", 180.0)),
+                "weather_stream":       getattr(self, "weather_stream", "live"),
                 "log_dir": getattr(self, "log_dir", LOG_DIR),
                 "safety_fire_enabled": bool(self._is_safety_fire_enabled()),
                 "roof_auto_ctrl_enabled": bool(self.roof_auto_ctrl_var.get()),  # FIX: เพิ่ม save
@@ -5547,6 +5647,24 @@ class App(tk.Tk):
             self.rain_api_timeout  = float(data.get("rain_api_timeout",  getattr(self, "rain_api_timeout", 2.5)))
             self.rain_stale_sec    = float(data.get("rain_stale_sec",    getattr(self, "rain_stale_sec", 10.0)))
             self.rain_poll_interval = int(data.get("rain_poll_interval", getattr(self, "rain_poll_interval", 1)))
+            # Weather Station (CR300)
+            self.weather_enabled     = bool(data.get("weather_enabled", getattr(self, "weather_enabled", True)))
+            self.weather_api_base    = data.get("weather_api_base", getattr(self, "weather_api_base", ""))
+            self.weather_api_timeout = float(data.get("weather_api_timeout", getattr(self, "weather_api_timeout", 5.0)))
+            self.weather_poll_interval = int(data.get("weather_poll_interval", getattr(self, "weather_poll_interval", 60)))
+            self.weather_stale_sec   = float(data.get("weather_stale_sec", getattr(self, "weather_stale_sec", 180.0)))
+            self.weather_stream      = data.get("weather_stream", getattr(self, "weather_stream", "live"))
+            for _attr, _var in (("weather_enabled", "weather_enabled_var"),
+                                ("weather_api_base", "weather_api_base_var"),
+                                ("weather_api_timeout", "weather_timeout_var"),
+                                ("weather_poll_interval", "weather_interval_var"),
+                                ("weather_stale_sec", "weather_stale_var"),
+                                ("weather_stream", "weather_stream_var")):
+                if hasattr(self, _var):
+                    try:
+                        getattr(self, _var).set(getattr(self, _attr))
+                    except Exception:
+                        pass
             self.log_dir = data.get(
                 "log_dir",
                 getattr(self, "log_dir", LOG_DIR)
@@ -6051,6 +6169,7 @@ class App(tk.Tk):
             # หยุด network scan ที่อาจกำลังรันอยู่ (กัน callback หลังปิดหน้าต่าง)
             if hasattr(self, "_scan_stop_flag"):
                 self._scan_stop_flag.set()
+            self._weather_poll_stop = True
             self.stop_all_programs()
             self._stop_telemetry()
             # หยุด data logger + ปล่อยล็อกไฟล์
@@ -6493,6 +6612,166 @@ class App(tk.Tk):
         except Exception:
             pass
 
+    # ------------------------------------------------------------------ #
+    #  Weather Station (CR300) polling                                     #
+    # ------------------------------------------------------------------ #
+    def _weather_url(self, path: str) -> str:
+        """ประกอบ URL จาก base + stream path
+
+        รองรับได้ทั้ง:
+          - วาง base เปล่า      : http://host:8000/api/cr300  หรือ  http://host:8000
+          - วาง endpoint เต็ม   : http://host:8000/live  หรือ  .../api/cr300/latest
+        ถ้า base ลงท้ายด้วย /live หรือ /latest อยู่แล้ว จะตัดออกก่อนแล้วต่อ stream ที่เลือก
+        จึงไม่เกิด .../live/live
+        """
+        base = (getattr(self, "weather_api_base", "") or "").strip().rstrip("/")
+        if not base:
+            return ""
+        low = base.lower()
+        for suf in ("/live", "/latest"):
+            if low.endswith(suf):
+                base = base[: -len(suf)].rstrip("/")
+                break
+        return f"{base}/{path.lstrip('/')}"
+
+    @staticmethod
+    def _wx_fmt(val) -> str:
+        """จัดรูปค่าให้อ่านง่าย: ตัวเลข → ทศนิยม ≤2 ตำแหน่ง, อื่น ๆ → str"""
+        if val is None:
+            return "-"
+        if isinstance(val, bool):
+            return str(int(val))
+        if isinstance(val, (int, float)):
+            f = float(val)
+            if f == int(f):
+                return str(int(f))
+            return f"{f:.2f}".rstrip("0").rstrip(".")
+        s = str(val).strip()
+        # ค่าที่มาเป็น string ตัวเลข (เช่นจาก /records)
+        try:
+            return App._wx_fmt(float(s))
+        except Exception:
+            return s if s else "-"
+
+    def _fetch_weather(self, stream: str = "live", timeout: float = 5.0) -> dict | None:
+        """GET /live หรือ /latest คืน record dict หรือ None (ไม่ raise)"""
+        import urllib.request
+        path = "live" if stream == "live" else "latest"
+        url = self._weather_url(path)
+        if not url:
+            return None
+        try:
+            req = urllib.request.Request(url, headers={
+                "Accept": "application/json",
+                "User-Agent": "LaserControl-Weather",
+            })
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            # /live, /latest คืน {station, RecNbr, time_local, fields:{...}}
+            # ต้องมี fields ถึงถือว่าใช้ได้ (503 = {"ok": false, ...})
+            if isinstance(data, dict) and data.get("fields") is not None:
+                return data
+            return None
+        except Exception:
+            return None
+
+    def _poll_weather(self):
+        """ดึงค่า Weather Station ทุก N วินาที — ไม่บล็อก UI (worker thread)"""
+        if not getattr(self, "weather_enabled", True):
+            return
+        if getattr(self, "_weather_poll_stop", False):
+            return
+        interval_ms = max(5, int(getattr(self, "weather_poll_interval", 60))) * 1000
+        if getattr(self, "_weather_poll_inflight", False):
+            self.after(interval_ms, self._poll_weather)
+            return
+
+        self._weather_poll_inflight = True
+        stream = (getattr(self, "weather_stream", "live") or "live")
+        tout   = float(getattr(self, "weather_api_timeout", 5.0))
+        stale  = float(getattr(self, "weather_stale_sec", 180.0))
+
+        def worker():
+            rec = self._fetch_weather(stream, timeout=tout)
+            try:
+                if rec:
+                    self._weather_last_ok_ts = time.monotonic()
+                    ts = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
+                    self.after(0, lambda r=rec, t=ts, s=stream:
+                               self._update_weather_ui(r, t, s))
+                else:
+                    last = self._weather_last_ok_ts
+                    age = (time.monotonic() - last) if last is not None else float("inf")
+                    if last is None or age > stale:
+                        self.after(0, self._show_weather_na)
+                    # ถ้ายังไม่ stale → คงค่าเดิมไว้ (แค่ไม่มี record ใหม่รอบนี้)
+            except Exception:
+                pass
+            finally:
+                self._weather_poll_inflight = False
+
+        threading.Thread(target=worker, daemon=True, name="WeatherPollThread").start()
+        self.after(interval_ms, self._poll_weather)
+
+    def _apply_weather_record(self, rec: dict) -> int:
+        """อัปเดต self._wx_vars จาก record (main thread) คืนจำนวน field ที่เซ็ต"""
+        if not isinstance(rec, dict):
+            return 0
+        n = 0
+        recnum = rec.get("RecNbr", rec.get("RecNum"))
+        if recnum is not None:
+            self._wx_vars["RecNum"].set(str(recnum)); n += 1
+        tstamp = rec.get("time_local") or rec.get("TimeStamp")
+        if tstamp:
+            self._wx_vars["TimeStamp"].set(str(tstamp)); n += 1
+        fields = rec.get("fields")
+        if not isinstance(fields, dict):
+            skip = {"fields", "station", "RecNbr", "RecNum", "time_local", "TimeStamp", "ok", "error"}
+            fields = {k: v for k, v in rec.items() if k not in skip}
+        alias = getattr(self, "_WX_API_ALIAS", {})
+        for k, val in fields.items():
+            key = k if k in self._wx_vars else alias.get(k)
+            if key and key in self._wx_vars:
+                self._wx_vars[key].set(self._wx_fmt(val)); n += 1
+        return n
+
+    def _update_weather_ui(self, rec: dict, ts: str, stream: str = "live"):
+        """อัปเดตการ์ด Weather Station (main thread เท่านั้น)"""
+        try:
+            self._apply_weather_record(rec)
+            self._wx_status_var.set(f"Online ({stream})")
+            try:
+                self._wx_status_lbl.config(foreground="#1a7f37")   # เขียว
+            except Exception:
+                pass
+            self._wx_ts_var.set(ts)
+        except Exception:
+            pass
+
+    def _show_weather_na(self):
+        """แสดงสถานะ Offline/N/A เมื่ออ่านค่าไม่ได้นานเกิน stale"""
+        try:
+            for k in self._WX_FIELDS:
+                self._wx_vars[k].set("-")
+            self._wx_status_var.set("Offline")
+            try:
+                self._wx_status_lbl.config(foreground="gray")
+            except Exception:
+                pass
+            self._wx_ts_var.set("N/A")
+        except Exception:
+            pass
+
+    def _apply_weather_enabled(self, enabled: bool):
+        """เปิด/ปิด Weather Station polling"""
+        self.weather_enabled = bool(enabled)
+        if enabled:
+            self._weather_poll_stop = False
+            self._weather_poll_inflight = False
+            self.after(200, self._poll_weather)
+        else:
+            self._weather_poll_stop = True
+            self._show_weather_na()
 
     def _on_rain_started(self):
         """
