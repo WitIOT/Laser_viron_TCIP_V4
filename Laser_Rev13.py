@@ -1455,7 +1455,7 @@ class App(tk.Tk):
 
         conn_cfg = ttk.LabelFrame(parent, text="Laser Connection Settings")
         self._ui_refs["cfg_conn_frame"] = conn_cfg
-        conn_cfg.grid(row=0, column=0, columnspan=2, sticky="nwe", padx=10, pady=10)
+        conn_cfg.grid(row=0, column=0, columnspan=2, sticky="nwe", padx=8, pady=(8, 8))
         conn_cfg.columnconfigure(1, weight=1)
 
         self.ip_var = tk.StringVar(value="127.0.0.1")
@@ -1464,19 +1464,19 @@ class App(tk.Tk):
         self.port_var = tk.StringVar(value="")
         self.user_var = tk.StringVar(value="VR70AB07")
 
-        ttk.Label(conn_cfg, text="IP").grid(row=0, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text="IP").grid(row=0, column=0, sticky="w", padx=6, pady=4)
         ip_entry = ttk.Entry(conn_cfg, textvariable=self.ip_var, width=20)
-        ip_entry.grid(row=0, column=1, sticky="w", padx=6, pady=6)
+        ip_entry.grid(row=0, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(conn_cfg, text="Port").grid(row=1, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text="Port").grid(row=1, column=0, sticky="w", padx=6, pady=4)
         port_entry = ttk.Entry(conn_cfg, textvariable=self.port_var, width=10)
-        port_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
+        port_entry.grid(row=1, column=1, sticky="w", padx=6, pady=4)
         ttk.Label(conn_cfg, text=f"(optional — default {DEFAULT_LASER_PORT})",
-                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6, pady=6)
+                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6, pady=4)
 
-        ttk.Label(conn_cfg, text="User").grid(row=2, column=0, sticky="w", padx=6, pady=6)
+        ttk.Label(conn_cfg, text="User").grid(row=2, column=0, sticky="w", padx=6, pady=4)
         user_entry = ttk.Entry(conn_cfg, textvariable=self.user_var, width=16)
-        user_entry.grid(row=2, column=1, sticky="w", padx=6, pady=6)
+        user_entry.grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
         self._ui_refs["ip_entry"] = ip_entry
         self._ui_refs["port_entry"] = port_entry
@@ -1486,26 +1486,35 @@ class App(tk.Tk):
         self.limit_api_url_var = tk.StringVar(value=str(getattr(self, "limit_api_url", "")))
         self.log_dir_var = tk.StringVar(value=str(getattr(self, "log_dir", LOG_DIR)))
 
-        # ---- [LEFT COL 0] Roof Settings ----
-        roof_lf = ttk.LabelFrame(parent, text="Roof Settings")
+        # Two independent column containers so frames stack vertically without
+        # row-height coupling between the columns (keeps both sides balanced).
+        left_col = ttk.Frame(parent)
+        left_col.grid(row=1, column=0, sticky="nwe")
+        left_col.columnconfigure(0, weight=1)
+        right_col = ttk.Frame(parent)
+        right_col.grid(row=1, column=1, sticky="nwe")
+        right_col.columnconfigure(0, weight=1)
+
+        # ---- [LEFT] Roof Settings ----
+        roof_lf = ttk.LabelFrame(left_col, text="Roof Settings")
         self._ui_refs["cfg_roof_frame"] = roof_lf
-        roof_lf.grid(row=1, column=0, sticky="nwe", padx=10, pady=10)
+        roof_lf.grid(row=0, column=0, sticky="nwe", padx=8, pady=(8, 8))
         roof_lf.columnconfigure(1, weight=1)
 
-        ttk.Label(roof_lf, text="roof_api_base").grid(row=0, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(roof_lf, textvariable=self.roof_api_base_var, width=55).grid(row=0, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(roof_lf, text="roof_api_base").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(roof_lf, textvariable=self.roof_api_base_var, width=44).grid(row=0, column=1, sticky="we", padx=6, pady=4)
 
-        ttk.Label(roof_lf, text="limit_api_url").grid(row=1, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(roof_lf, textvariable=self.limit_api_url_var, width=55).grid(row=1, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(roof_lf, text="limit_api_url").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(roof_lf, textvariable=self.limit_api_url_var, width=44).grid(row=1, column=1, sticky="we", padx=6, pady=4)
 
         self.prefire_open_sec_var = tk.DoubleVar(value=float(getattr(self, "roof_preopen_sec", 15)))
         self.postrest_close_sec_var = tk.DoubleVar(value=float(getattr(self, "roof_postclose_sec", 3)))
 
-        ttk.Label(roof_lf, text="Pre-open lead (sec)").grid(row=2, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(roof_lf, textvariable=self.prefire_open_sec_var, width=12).grid(row=2, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(roof_lf, text="Pre-open lead (sec)").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(roof_lf, textvariable=self.prefire_open_sec_var, width=10).grid(row=2, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(roof_lf, text="Post-close delay (sec)").grid(row=3, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(roof_lf, textvariable=self.postrest_close_sec_var, width=12).grid(row=3, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(roof_lf, text="Post-close delay (sec)").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(roof_lf, textvariable=self.postrest_close_sec_var, width=10).grid(row=3, column=1, sticky="w", padx=6, pady=4)
 
         ttk.Label(roof_lf, text="Used by auto open/close around FIRE/REST", foreground="gray")\
             .grid(row=4, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 6))
@@ -1520,13 +1529,13 @@ class App(tk.Tk):
         self._ui_refs["roof_auto_cb"] = self.roof_auto_sched_cb
         self._update_roof_auto_label()
 
-        # ---- [RIGHT COL 1] Logs & System Settings ----
-        logs_lf = ttk.LabelFrame(parent, text="Logs & System Settings")
-        logs_lf.grid(row=1, column=1, sticky="nwe", padx=10, pady=10)
+        # ---- [RIGHT] Logs & System Settings ----
+        logs_lf = ttk.LabelFrame(right_col, text="Logs & System Settings")
+        logs_lf.grid(row=0, column=0, sticky="nwe", padx=8, pady=(8, 8))
         logs_lf.columnconfigure(1, weight=1)
 
-        ttk.Label(logs_lf, text="Logs directory").grid(row=0, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(logs_lf, textvariable=self.log_dir_var, width=55).grid(row=0, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(logs_lf, text="Logs directory").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(logs_lf, textvariable=self.log_dir_var, width=44).grid(row=0, column=1, sticky="we", padx=6, pady=4)
 
         def browse_dir():
             try:
@@ -1536,7 +1545,7 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-        ttk.Button(logs_lf, text="Browse", command=browse_dir).grid(row=0, column=2, padx=6, pady=6)
+        ttk.Button(logs_lf, text="Browse", command=browse_dir).grid(row=0, column=2, padx=6, pady=4)
 
         if not hasattr(self, "safety_fire_enabled_var"):
             self.safety_fire_enabled_var = tk.BooleanVar(value=bool(getattr(self, "safety_fire_enabled", True)))
@@ -1553,7 +1562,7 @@ class App(tk.Tk):
             text="Enable Safety Fire (Block FIRE when Roof != ON)",
             variable=self.safety_fire_enabled_var,
             command=_on_toggle_safety
-        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=6, pady=6)
+        ).grid(row=1, column=0, columnspan=3, sticky="w", padx=6, pady=4)
 
         ttk.Checkbutton(
             logs_lf,
@@ -1561,15 +1570,15 @@ class App(tk.Tk):
             variable=self.monday_warmup_enabled_var
         ).grid(row=2, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 4))
 
-        ttk.Label(logs_lf, text="Warmup lead (min)").grid(row=3, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(logs_lf, textvariable=self.monday_warmup_lead_min_var, width=12).grid(row=3, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(logs_lf, text="Warmup lead (min)").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(logs_lf, textvariable=self.monday_warmup_lead_min_var, width=10).grid(row=3, column=1, sticky="w", padx=6, pady=4)
 
-        ttk.Label(logs_lf, text="DTEMF ready >= (°C)").grid(row=4, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(logs_lf, textvariable=self.monday_warmup_threshold_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(logs_lf, text="DTEMF ready >= (°C)").grid(row=4, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(logs_lf, textvariable=self.monday_warmup_threshold_var, width=10).grid(row=4, column=1, sticky="w", padx=6, pady=4)
 
         # ---- [RIGHT COL 1] Data Logger (continuous CSV) ----
-        dlog_lf = ttk.LabelFrame(parent, text="Data Logger (continuous CSV — one file per day)")
-        dlog_lf.grid(row=2, column=1, sticky="nwe", padx=10, pady=(0, 10))
+        dlog_lf = ttk.LabelFrame(right_col, text="Data Logger (continuous CSV — one file per day)")
+        dlog_lf.grid(row=1, column=0, sticky="nwe", padx=8, pady=(0, 8))
         dlog_lf.columnconfigure(1, weight=1)
         self._ui_refs["cfg_datalog_frame"] = dlog_lf
 
@@ -1580,9 +1589,9 @@ class App(tk.Tk):
                         command=_toggle_datalog
                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(6, 2))
 
-        ttk.Label(dlog_lf, text="Log directory").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(dlog_lf, textvariable=self.datalog_dir_var, width=48).grid(
-            row=1, column=1, sticky="we", padx=4, pady=5)
+        ttk.Label(dlog_lf, text="Log directory").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(dlog_lf, textvariable=self.datalog_dir_var, width=44).grid(
+            row=1, column=1, sticky="we", padx=4, pady=4)
 
         def _browse_datalog_dir():
             try:
@@ -1592,13 +1601,13 @@ class App(tk.Tk):
             except Exception:
                 pass
         ttk.Button(dlog_lf, text="Browse", command=_browse_datalog_dir).grid(
-            row=1, column=2, padx=6, pady=5)
+            row=1, column=2, padx=6, pady=4)
         ttk.Label(dlog_lf, text="Leave empty = use the system Logs directory",
                   foreground="gray").grid(row=2, column=1, columnspan=2, sticky="w", padx=4)
 
-        ttk.Label(dlog_lf, text="Log interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
+        ttk.Label(dlog_lf, text="Log interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=4)
         ttk.Entry(dlog_lf, textvariable=self.datalog_interval_var, width=8).grid(
-            row=3, column=1, sticky="w", padx=4, pady=5)
+            row=3, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(dlog_lf, text="Logging interval (default 300 = 5 min)",
                   foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
 
@@ -1632,39 +1641,39 @@ class App(tk.Tk):
             row=8, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
         # ---- [LEFT COL 0] Temp & RH Sensor Settings ----
-        sensor_lf = ttk.LabelFrame(parent, text="Temp & RH Sensor Settings")
+        sensor_lf = ttk.LabelFrame(right_col, text="Temp & RH Sensor Settings")
         self._ui_refs["cfg_sensor_frame"] = sensor_lf
-        sensor_lf.grid(row=2, column=0, sticky="nwe", padx=10, pady=(0, 10))
-        sensor_lf.columnconfigure(1, weight=1)
-        sensor_lf.columnconfigure(2, weight=1)
+        sensor_lf.grid(row=2, column=0, sticky="nwe", padx=8, pady=(0, 8))
+        sensor_lf.columnconfigure(1, weight=0)
+        sensor_lf.columnconfigure(3, weight=1)   # trailing spacer absorbs slack
 
         def _toggle_sensor_from_settings():
             self._apply_sensor_enabled(bool(self.sensor_enabled_var.get()))
         ttk.Checkbutton(sensor_lf, text="Enable Temp & RH Sensor",
                          variable=self.sensor_enabled_var,
                          command=_toggle_sensor_from_settings,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(6, 2))
+        ).grid(row=0, column=0, columnspan=4, sticky="w", padx=6, pady=(6, 2))
 
-        ttk.Label(sensor_lf, text="sensor_api_url:").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(sensor_lf, textvariable=self.sensor_api_url_var, width=50).grid(row=1, column=1, sticky="we", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="(e.g. http://192.168.49.8:8000/api/sensor)", foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="sensor_api_url:").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(sensor_lf, textvariable=self.sensor_api_url_var).grid(row=1, column=1, columnspan=3, sticky="we", padx=6, pady=4)
+        ttk.Label(sensor_lf, text="(e.g. http://192.168.49.8:8000/api/sensor)", foreground="gray").grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=(0, 4))
 
-        ttk.Label(sensor_lf, text="Request timeout (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(sensor_lf, textvariable=self.sensor_timeout_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="HTTP timeout per request", foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="Request timeout (s):").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(sensor_lf, textvariable=self.sensor_timeout_var, width=8).grid(row=3, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(sensor_lf, text="HTTP timeout per request", foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
 
-        ttk.Label(sensor_lf, text="Poll interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(sensor_lf, textvariable=self.sensor_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="Fetch interval (recommended 5–30 s)", foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="Poll interval (s):").grid(row=4, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(sensor_lf, textvariable=self.sensor_interval_var, width=8).grid(row=4, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(sensor_lf, text="Fetch interval (recommended 5–30 s)", foreground="gray").grid(row=4, column=2, sticky="w", padx=6)
 
-        ttk.Label(sensor_lf, text="Stale threshold (s):").grid(row=4, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(sensor_lf, textvariable=self.sensor_stale_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="How long before showing N/A when unreadable", foreground="gray").grid(row=4, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="Stale threshold (s):").grid(row=5, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(sensor_lf, textvariable=self.sensor_stale_var, width=8).grid(row=5, column=1, sticky="w", padx=6, pady=4)
+        ttk.Label(sensor_lf, text="How long before showing N/A when unreadable", foreground="gray").grid(row=5, column=2, sticky="w", padx=6)
 
         # ---- [LEFT COL 0] Rain Sensor Settings ----
-        rain_lf = ttk.LabelFrame(parent, text="Rain Sensor Settings")
+        rain_lf = ttk.LabelFrame(left_col, text="Rain Sensor Settings")
         self._ui_refs["cfg_rain_frame"] = rain_lf
-        rain_lf.grid(row=3, column=0, sticky="nwe", padx=10, pady=(0, 10))
+        rain_lf.grid(row=1, column=0, sticky="nwe", padx=8, pady=(0, 8))
         rain_lf.columnconfigure(1, weight=1)
 
         def _toggle_rain_from_settings():
@@ -1675,8 +1684,8 @@ class App(tk.Tk):
             command=_toggle_rain_from_settings,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(8, 2))
 
-        ttk.Label(rain_lf, text="rain_api_url").grid(row=1, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(rain_lf, textvariable=self.rain_api_url_var, width=50).grid(row=1, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(rain_lf, text="rain_api_url").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(rain_lf, textvariable=self.rain_api_url_var, width=44).grid(row=1, column=1, sticky="we", padx=6, pady=4)
         ttk.Label(rain_lf, text="(e.g. http://192.168.3.150:8000/api/rain)",
                   foreground="gray").grid(row=1, column=2, padx=6, sticky="w")
 
@@ -1684,18 +1693,18 @@ class App(tk.Tk):
         rain_timing.grid(row=2, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 6))
         rain_timing.columnconfigure(2, weight=1)
 
-        ttk.Label(rain_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(rain_timing, textvariable=self.rain_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(rain_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(rain_timing, textvariable=self.rain_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(rain_timing, text="HTTP timeout per request (recommended 1.5–5)",
                   foreground="gray").grid(row=0, column=2, sticky="w", padx=6)
 
-        ttk.Label(rain_timing, text="Stale threshold (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(rain_timing, textvariable=self.rain_stale_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(rain_timing, text="Stale threshold (s):").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(rain_timing, textvariable=self.rain_stale_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(rain_timing, text="How long before showing N/A when unreadable (recommended 5–30)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
 
-        ttk.Label(rain_timing, text="Poll interval (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(rain_timing, textvariable=self.rain_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(rain_timing, text="Poll interval (s):").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(rain_timing, textvariable=self.rain_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(rain_timing, text="Fetch interval (recommended 1–5 s)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
@@ -1714,8 +1723,8 @@ class App(tk.Tk):
             command=_toggle_auto_restart,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 2))
 
-        ttk.Label(auto_rs, text="Dry wait (minutes):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(auto_rs, textvariable=self.auto_restart_delay_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(auto_rs, text="Dry wait (minutes):").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(auto_rs, textvariable=self.auto_restart_delay_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(auto_rs, text="It must stay dry this long before restarting (default 30)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
         ttk.Label(auto_rs,
@@ -1725,7 +1734,7 @@ class App(tk.Tk):
         # ---- [FULL WIDTH row 4] Weather Station (CR300) Settings ----
         wx_lf = ttk.LabelFrame(parent, text="Weather Station (CR300) Settings")
         self._ui_refs["cfg_weather_frame"] = wx_lf
-        wx_lf.grid(row=4, column=0, columnspan=2, sticky="nwe", padx=10, pady=(0, 10))
+        wx_lf.grid(row=2, column=0, columnspan=2, sticky="nwe", padx=8, pady=(0, 8))
         wx_lf.columnconfigure(1, weight=1)
 
         def _toggle_weather_from_settings():
@@ -1736,15 +1745,15 @@ class App(tk.Tk):
             command=_toggle_weather_from_settings,
         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(8, 2))
 
-        ttk.Label(wx_lf, text="weather_api_base").grid(row=1, column=0, sticky="w", padx=6, pady=6)
-        ttk.Entry(wx_lf, textvariable=self.weather_api_base_var, width=50).grid(
-            row=1, column=1, sticky="we", padx=6, pady=6)
+        ttk.Label(wx_lf, text="weather_api_base").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(wx_lf, textvariable=self.weather_api_base_var, width=44).grid(
+            row=1, column=1, sticky="we", padx=6, pady=4)
         ttk.Label(wx_lf, text="(e.g. http://192.168.3.77:8000 or .../api/cr300 — a full .../live URL also works)",
                   foreground="gray").grid(row=1, column=2, padx=6, sticky="w")
 
-        ttk.Label(wx_lf, text="Stream").grid(row=2, column=0, sticky="w", padx=6, pady=6)
-        ttk.Combobox(wx_lf, textvariable=self.weather_stream_var, width=12, state="readonly",
-                     values=("live", "averaged")).grid(row=2, column=1, sticky="w", padx=6, pady=6)
+        ttk.Label(wx_lf, text="Stream").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Combobox(wx_lf, textvariable=self.weather_stream_var, width=10, state="readonly",
+                     values=("live", "averaged")).grid(row=2, column=1, sticky="w", padx=6, pady=4)
         ttk.Label(wx_lf, text="live = real-time ~60s · averaged = hourly average",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
@@ -1752,23 +1761,23 @@ class App(tk.Tk):
         wx_timing.grid(row=3, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 6))
         wx_timing.columnconfigure(2, weight=1)
 
-        ttk.Label(wx_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(wx_timing, textvariable=self.weather_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(wx_timing, textvariable=self.weather_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(wx_timing, text="HTTP timeout per request (recommended 3–10)",
                   foreground="gray").grid(row=0, column=2, sticky="w", padx=6)
 
-        ttk.Label(wx_timing, text="Poll interval (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(wx_timing, textvariable=self.weather_interval_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="Poll interval (s):").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(wx_timing, textvariable=self.weather_interval_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(wx_timing, text="Fetch interval (live 30–60, averaged 300–600)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
 
-        ttk.Label(wx_timing, text="Stale threshold (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
-        ttk.Entry(wx_timing, textvariable=self.weather_stale_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(wx_timing, text="Stale threshold (s):").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(wx_timing, textvariable=self.weather_stale_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=4)
         ttk.Label(wx_timing, text="How long before showing Offline when no new data (recommended 180–600)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
         btns = ttk.Frame(parent)
-        btns.grid(row=5, column=1, sticky="se", padx=10, pady=(0, 10))
+        btns.grid(row=3, column=1, sticky="se", padx=8, pady=(4, 8))
         btn_cfg_save = ttk.Button(btns, text="Apply & Save", command=self._apply_and_save_config)
         btn_cfg_save.pack(side=tk.RIGHT, padx=4)
         self._ui_refs["config_save_btn"] = btn_cfg_save
