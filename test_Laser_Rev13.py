@@ -239,6 +239,11 @@ class TestRainStopsPrograms:
         app._batch_stopping = False
         app.stopped_idx = []
         app.stop_program = lambda i: app.stopped_idx.append(i)
+        # auto-restart state (ต้องตั้งไว้ กัน tk.Tk.__getattr__ recursion บน bare object)
+        app._rain_stopped_programs = []
+        app._rain_last_wet_ts = None
+        app.auto_restart_enabled = False
+        app.auto_restart_delay_min = 30
         return app
 
     def test_rain_stops_running_programs(self):
@@ -1100,3 +1105,128 @@ class TestWeatherStation:
         app = self._app()
         assert app._apply_weather_record(None) == 0
         assert app._apply_weather_record("nope") == 0
+
+
+# --------------------------------------------------------------------- #
+#  Auto-restart after rain clears (optional feature)
+# --------------------------------------------------------------------- #
+class TestAutoRestartAfterRain:
+    DELAY = 30            # minutes
+    T0 = 1000.0          # monotonic baseline for _rain_last_wet_ts
+
+    def _ready_app(self, **over):
+        app = make_app()
+        app.auto_restart_enabled = True
+        app._rain_stopped_programs = [0]
+        app.laser = object()
+        app.rain_enabled = True
+        app._rain_online = True
+        app.is_raining_now = lambda: False
+        app._rain_last_wet_ts = self.T0
+        app.auto_restart_delay_min = self.DELAY
+        for k, v in over.items():
+            setattr(app, k, v)
+        return app
+
+    def _now_after(self, secs):
+        return self.T0 + secs
+
+    # ---- _auto_restart_ready ----
+    def test_ready_when_dry_long_enough(self):
+        app = self._ready_app()
+        assert app._auto_restart_ready(self._now_after(self.DELAY * 60)) is True
+
+    def test_not_ready_before_delay(self):
+        app = self._ready_app()
+        assert app._auto_restart_ready(self._now_after(self.DELAY * 60 - 1)) is False
+
+    def test_not_ready_when_feature_off(self):
+        app = self._ready_app(auto_restart_enabled=False)
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_without_pending(self):
+        app = self._ready_app(_rain_stopped_programs=[])
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_without_laser(self):
+        app = self._ready_app(laser=None)
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_when_raining(self):
+        app = self._ready_app()
+        app.is_raining_now = lambda: True
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_when_sensor_offline(self):
+        app = self._ready_app(_rain_online=False)
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_when_rain_disabled(self):
+        app = self._ready_app(rain_enabled=False)
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    def test_not_ready_when_never_wet(self):
+        app = self._ready_app(_rain_last_wet_ts=None)
+        assert app._auto_restart_ready(self._now_after(99999)) is False
+
+    # ---- _do_auto_restart ----
+    def test_do_restart_starts_only_eligible(self):
+        app = make_app()
+        app.auto_restart_delay_min = self.DELAY
+        app._in_auto_restart = False
+        app.log = lambda m: None
+        app._sched_log = lambda i, m: None
+        started = []
+        app.start_program = lambda i: started.append(i)
+        alive = types.SimpleNamespace(is_alive=lambda: True)
+        dead = types.SimpleNamespace(is_alive=lambda: False)
+        app.programs = [
+            {"runner": None,  "enabled": FakeVar(True)},   # 0: eligible
+            {"runner": alive, "enabled": FakeVar(True)},   # 1: already running -> skip
+            {"runner": dead,  "enabled": FakeVar(False)},  # 2: disabled -> skip
+        ]
+        app._rain_stopped_programs = [0, 1, 2]
+        app._do_auto_restart()
+        assert started == [0]
+        assert app._rain_stopped_programs == []            # cleared
+
+    def test_do_restart_empty_pending_noop(self):
+        app = make_app()
+        app._rain_stopped_programs = []
+        app.start_program = lambda i: (_ for _ in ()).throw(AssertionError("should not start"))
+        app._do_auto_restart()   # must not raise / not call start
+
+    # ---- integration with _on_rain_started ----
+    def test_rain_records_pending(self):
+        t = TestRainStopsPrograms()
+        app = t._make_rain_app()
+        app.auto_restart_enabled = True
+        runner = types.SimpleNamespace(is_alive=lambda: True)
+        app.programs = [{"runner": runner}]
+        app._on_rain_started()
+        assert app._rain_stopped_programs == [0]
+        assert app._rain_last_wet_ts is not None
+
+    # ---- manual Start removes from pending ----
+    def test_manual_start_removes_from_pending(self, monkeypatch):
+        app = make_app()
+        app._in_auto_restart = False
+        app._rain_stopped_programs = [0, 1]
+        app.programs = [{"enabled": FakeVar(True)}, {"enabled": FakeVar(True)}]
+        app.laser = None            # start_program จะ return หลังเอา idx ออกจาก pending
+        app._sched_log = lambda i, m: None
+        monkeypatch.setattr(L.messagebox, "showwarning", lambda *a, **k: None)
+        app.start_program(0)
+        assert app._rain_stopped_programs == [1]
+
+    def test_auto_restart_does_not_remove_from_pending(self, monkeypatch):
+        # ตอน restart เอง (_in_auto_restart=True) ต้องไม่ลบ idx ใน start_program
+        app = make_app()
+        app._in_auto_restart = True
+        app._rain_stopped_programs = [0]
+        app.programs = [{"enabled": FakeVar(True)}]
+        app.laser = None
+        app._sched_log = lambda i, m: None
+        monkeypatch.setattr(L.messagebox, "showwarning", lambda *a, **k: None)
+        app.start_program(0)
+        assert app._rain_stopped_programs == [0]   # ไม่ถูกลบ
