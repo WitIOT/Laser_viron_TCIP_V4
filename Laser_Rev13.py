@@ -558,6 +558,10 @@ class App(tk.Tk):
         self.rain_api_timeout = 2.5    # seconds – HTTP request timeout
         self.rain_stale_sec   = 10.0   # seconds – grace period ก่อนแสดง N/A
         self.rain_poll_interval = 1    # seconds – ความถี่ poll (ขั้นต่ำ 1)
+        # App-side rain decision from intensity (optional override):
+        # treat it as raining when intensity >= threshold even if the API says is_raining=false
+        self.rain_intensity_override  = False   # opt-in, default OFF
+        self.rain_intensity_threshold = 0.2     # mm/hr — >= this counts as raining when override is on
         self._rain_is_raining = False          # สถานะฝนล่าสุด
         self._rain_online = False              # สถานะ online/offline ของ sensor (จากฟิลด์ "online" ใน API)
         self._rain_intensity = 0.0             # mm/hr
@@ -710,6 +714,9 @@ class App(tk.Tk):
         self.rain_stale_var        = tk.DoubleVar(value=self.rain_stale_sec)
         self.rain_interval_var     = tk.IntVar(value=self.rain_poll_interval)
         self.rain_enabled_var      = tk.BooleanVar(value=self.rain_enabled)
+        # Rain decision by intensity (app-side override)
+        self.rain_intensity_override_var  = tk.BooleanVar(value=self.rain_intensity_override)
+        self.rain_intensity_threshold_var = tk.DoubleVar(value=self.rain_intensity_threshold)
         # Auto-restart after rain
         self.auto_restart_enabled_var = tk.BooleanVar(value=self.auto_restart_enabled)
         self.auto_restart_delay_var   = tk.IntVar(value=self.auto_restart_delay_min)
@@ -1708,6 +1715,18 @@ class App(tk.Tk):
         ttk.Label(rain_timing, text="Fetch interval (recommended 1–5 s)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
+        ttk.Separator(rain_timing, orient="horizontal").grid(
+            row=3, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 4))
+        ttk.Checkbutton(
+            rain_timing,
+            text="Also treat as raining when intensity ≥ threshold (ignore API is_raining=false)",
+            variable=self.rain_intensity_override_var,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 2))
+        ttk.Label(rain_timing, text="Intensity threshold (mm/hr):").grid(row=5, column=0, sticky="w", padx=6, pady=4)
+        ttk.Entry(rain_timing, textvariable=self.rain_intensity_threshold_var, width=8).grid(row=5, column=1, sticky="w", padx=4, pady=4)
+        ttk.Label(rain_timing, text="≥ this value counts as raining (0 = disabled)",
+                  foreground="gray").grid(row=5, column=2, sticky="w", padx=6)
+
         # ---- Auto-restart after rain (optional) ----
         auto_rs = ttk.LabelFrame(rain_lf, text="Auto-restart after rain (optional)")
         auto_rs.grid(row=3, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 6))
@@ -2659,6 +2678,12 @@ class App(tk.Tk):
                 pass
             try:
                 self.rain_poll_interval = max(1, int(self.rain_interval_var.get()))
+            except Exception:
+                pass
+            # Rain decision by intensity (app-side override)
+            self.rain_intensity_override = bool(self.rain_intensity_override_var.get())
+            try:
+                self.rain_intensity_threshold = max(0.0, float(self.rain_intensity_threshold_var.get()))
             except Exception:
                 pass
             # Auto-restart after rain
@@ -5517,6 +5542,8 @@ class App(tk.Tk):
                 "rain_api_timeout":  float(getattr(self, "rain_api_timeout", 2.5)),
                 "rain_stale_sec":    float(getattr(self, "rain_stale_sec", 10.0)),
                 "rain_poll_interval": int(getattr(self, "rain_poll_interval", 1)),
+                "rain_intensity_override":  bool(getattr(self, "rain_intensity_override", False)),
+                "rain_intensity_threshold": float(getattr(self, "rain_intensity_threshold", 0.2)),
                 "auto_restart_enabled":   bool(getattr(self, "auto_restart_enabled", False)),
                 "auto_restart_delay_min": int(getattr(self, "auto_restart_delay_min", 30)),
                 "weather_enabled":      bool(getattr(self, "weather_enabled", True)),
@@ -5612,6 +5639,14 @@ class App(tk.Tk):
             self.rain_api_timeout  = float(data.get("rain_api_timeout",  getattr(self, "rain_api_timeout", 2.5)))
             self.rain_stale_sec    = float(data.get("rain_stale_sec",    getattr(self, "rain_stale_sec", 10.0)))
             self.rain_poll_interval = int(data.get("rain_poll_interval", getattr(self, "rain_poll_interval", 1)))
+            self.rain_intensity_override  = bool(data.get("rain_intensity_override", getattr(self, "rain_intensity_override", False)))
+            self.rain_intensity_threshold = float(data.get("rain_intensity_threshold", getattr(self, "rain_intensity_threshold", 0.2)))
+            if hasattr(self, "rain_intensity_override_var"):
+                try: self.rain_intensity_override_var.set(self.rain_intensity_override)
+                except Exception: pass
+            if hasattr(self, "rain_intensity_threshold_var"):
+                try: self.rain_intensity_threshold_var.set(self.rain_intensity_threshold)
+                except Exception: pass
             # Auto-restart after rain
             self.auto_restart_enabled   = bool(data.get("auto_restart_enabled", getattr(self, "auto_restart_enabled", False)))
             self.auto_restart_delay_min = int(data.get("auto_restart_delay_min", getattr(self, "auto_restart_delay_min", 30)))
@@ -6347,11 +6382,14 @@ class App(tk.Tk):
             data = self._fetch_rain_data(timeout=timeout)
             try:
                 if data and data.get("ok"):
-                    is_raining = bool(data.get("is_raining", False))
+                    api_raining = bool(data.get("is_raining", False))
                     online     = bool(data.get("online", False))
                     intensity  = float((data.get("intensity") or {}).get("value", 0.0))
                     total      = float(((data.get("accumulation") or {}).get("total") or {}).get("value", 0.0))
                     ts         = self._format_rain_timestamp_utc7(data.get("timestamp", ""))
+
+                    # final decision = API flag OR app-side intensity override
+                    is_raining = self._decide_raining(api_raining, intensity)
 
                     prev_raining = getattr(self, "_rain_is_raining", False)
 
@@ -7030,6 +7068,22 @@ class App(tk.Tk):
         win.after(1000, _tick)
 
         win.protocol("WM_DELETE_WINDOW", _close)
+
+    def _decide_raining(self, api_is_raining: bool, intensity: float) -> bool:
+        """ตัดสินสถานะฝนสุดท้ายที่แอปใช้ (pure, ทดสอบได้)
+        - ถ้า API บอกว่าฝนตก → ฝนตก
+        - ถ้าเปิด override: intensity >= threshold (ที่ > 0) → ถือว่าฝนตก แม้ API ว่า false
+        """
+        if api_is_raining:
+            return True
+        try:
+            if getattr(self, "rain_intensity_override", False):
+                thr = float(getattr(self, "rain_intensity_threshold", 0.0))
+                if thr > 0 and float(intensity) >= thr:
+                    return True
+        except Exception:
+            pass
+        return False
 
     def is_raining_now(self) -> bool:
         """Helper – คืน True ถ้าเซ็นเซอร์รายงานว่ามีฝน และ Rain Sensor เปิดอยู่"""

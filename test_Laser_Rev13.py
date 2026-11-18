@@ -1296,3 +1296,40 @@ class TestAutoRestartReindex:
         app._rain_stopped_programs = [0, 1]
         app._reindex_after_remove(5)      # ลบ index ที่สูงกว่าทุกตัว
         assert app._rain_stopped_programs == [0, 1]
+
+
+# --------------------------------------------------------------------- #
+#  App-side rain decision from intensity (optional override)
+# --------------------------------------------------------------------- #
+class TestRainIntensityOverride:
+    def _app(self, override=True, thr=0.2):
+        app = make_app()
+        app.rain_intensity_override = override
+        app.rain_intensity_threshold = thr
+        return app
+
+    def test_api_true_always_raining(self):
+        app = self._app(override=False)
+        assert app._decide_raining(True, 0.0) is True
+
+    def test_override_triggers_above_threshold(self):
+        app = self._app(override=True, thr=0.2)
+        assert app._decide_raining(False, 0.2) is True     # == threshold
+        assert app._decide_raining(False, 1.5) is True
+
+    def test_override_below_threshold_not_raining(self):
+        app = self._app(override=True, thr=0.2)
+        assert app._decide_raining(False, 0.1) is False
+        assert app._decide_raining(False, 0.0) is False
+
+    def test_override_disabled_ignores_intensity(self):
+        app = self._app(override=False, thr=0.2)
+        assert app._decide_raining(False, 5.0) is False
+
+    def test_threshold_zero_disables_override(self):
+        app = self._app(override=True, thr=0.0)
+        assert app._decide_raining(False, 5.0) is False    # thr must be > 0
+
+    def test_bad_intensity_is_safe(self):
+        app = self._app(override=True, thr=0.2)
+        assert app._decide_raining(False, float("nan")) is False  # nan >= thr is False
