@@ -562,8 +562,8 @@ class App(tk.Tk):
         #   "api"       -> use the API is_raining flag (default, original behavior)
         #   "intensity" -> raining when intensity >= threshold (ignore is_raining)
         #   "either"    -> raining when EITHER condition holds
-        self.rain_decision_mode       = "api"
-        self.rain_intensity_threshold = 0.2     # mm/hr — used by "intensity"/"either" modes
+        self.rain_decision_mode       = "either"   # default: API flag OR intensity (fail-safe)
+        self.rain_intensity_threshold = 0.2        # mm/hr — used by "intensity"/"either" modes
         self._rain_is_raining = False          # สถานะฝนล่าสุด
         self._rain_online = False              # สถานะ online/offline ของ sensor (จากฟิลด์ "online" ใน API)
         self._rain_intensity = 0.0             # mm/hr
