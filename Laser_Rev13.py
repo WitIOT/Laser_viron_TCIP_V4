@@ -568,7 +568,17 @@ class App(tk.Tk):
         self._rain_last_ok_ts: float | None = None   # monotonic time ของการอ่านสำเร็จล่าสุด
         self._rain_fail_count: int = 0               # จำนวน consecutive failures
         self._rain_popup_ts: float = 0.0             # monotonic time ที่แสดง popup ล่าสุด (cooldown กัน popup ซ้ำ)
-        self._RAIN_POPUP_COOLDOWN: float = 300.0     # วินาที — ห้ามแสดง popup ซ้ำภายใน 5 min
+        self._RAIN_POPUP_COOLDOWN: float = 300.0     # seconds — do not show the popup again within 5 min
+
+        # --- Auto-restart after rain (optional feature, toggleable) ---
+        # When rain stops the programs and it stays dry for N minutes, auto-start them again
+        self.auto_restart_enabled   = False          # default OFF (opt-in)
+        self.auto_restart_delay_min = 30             # minutes it must stay dry before restart
+        self._rain_stopped_programs = []             # indices of programs stopped by rain (pending restart)
+        self._rain_last_wet_ts: float | None = None  # monotonic time rain was last seen
+        self._auto_restart_after_id = None
+        self._auto_restart_stop = False              # stop flag for the watcher (set on close)
+        self._in_auto_restart = False                # prevents start_program from dropping idx from pending during auto-restart
         # _rain_monitor_stop ถูกลบออก (ไม่ได้ใช้งาน — ใช้ _rain_poll_stop แทน)
 
           # ใช้ bool สำหรับหยุด polling ใน _poll_roof_status()
@@ -700,6 +710,9 @@ class App(tk.Tk):
         self.rain_stale_var        = tk.DoubleVar(value=self.rain_stale_sec)
         self.rain_interval_var     = tk.IntVar(value=self.rain_poll_interval)
         self.rain_enabled_var      = tk.BooleanVar(value=self.rain_enabled)
+        # Auto-restart after rain
+        self.auto_restart_enabled_var = tk.BooleanVar(value=self.auto_restart_enabled)
+        self.auto_restart_delay_var   = tk.IntVar(value=self.auto_restart_delay_min)
         self.rain_status_var       = tk.StringVar(value="Rain: -")
         self.rain_online_var       = tk.StringVar(value="-")   # Sensor online/offline
         self.rain_intensity_var    = tk.StringVar(value="-")
@@ -782,6 +795,9 @@ class App(tk.Tk):
         # Weather Station (CR300) polling
         if getattr(self, 'weather_enabled', True):
             self.after(2500, self._poll_weather)
+
+        # Auto-restart watcher (รันตลอด ทำงานเฉพาะเมื่อ auto_restart_enabled)
+        self.after(5000, self._auto_restart_tick)
 
         self._poll_roof_status()
         # self._monitor_roof_during_fire()
@@ -914,6 +930,12 @@ class App(tk.Tk):
             if hasattr(self, "_scan_stop_flag"):
                 self._scan_stop_flag.set()
             self._weather_poll_stop = True
+            self._auto_restart_stop = True
+            try:
+                if getattr(self, "_auto_restart_after_id", None) is not None:
+                    self.after_cancel(self._auto_restart_after_id)
+            except Exception:
+                pass
             self.stop_all_programs()
             self._stop_telemetry()
             self._datalog_stop.set()
@@ -1676,6 +1698,29 @@ class App(tk.Tk):
         ttk.Entry(rain_timing, textvariable=self.rain_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
         ttk.Label(rain_timing, text="Fetch interval (recommended 1–5 s)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
+
+        # ---- Auto-restart after rain (optional) ----
+        auto_rs = ttk.LabelFrame(rain_lf, text="Auto-restart after rain (optional)")
+        auto_rs.grid(row=3, column=0, columnspan=3, sticky="we", padx=6, pady=(4, 6))
+        auto_rs.columnconfigure(2, weight=1)
+        self._ui_refs["cfg_auto_restart_frame"] = auto_rs
+
+        def _toggle_auto_restart():
+            self._apply_auto_restart_enabled(bool(self.auto_restart_enabled_var.get()))
+        ttk.Checkbutton(
+            auto_rs,
+            text="Auto-start programs stopped by rain once it has stayed dry long enough",
+            variable=self.auto_restart_enabled_var,
+            command=_toggle_auto_restart,
+        ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(4, 2))
+
+        ttk.Label(auto_rs, text="Dry wait (minutes):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
+        ttk.Entry(auto_rs, textvariable=self.auto_restart_delay_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
+        ttk.Label(auto_rs, text="It must stay dry this long before restarting (default 30)",
+                  foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
+        ttk.Label(auto_rs,
+                  text="Requires the Rain Sensor online and the Laser connected to auto-start",
+                  foreground="gray").grid(row=2, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 4))
 
         # ---- [FULL WIDTH row 4] Weather Station (CR300) Settings ----
         wx_lf = ttk.LabelFrame(parent, text="Weather Station (CR300) Settings")
@@ -2607,6 +2652,15 @@ class App(tk.Tk):
                 self.rain_poll_interval = max(1, int(self.rain_interval_var.get()))
             except Exception:
                 pass
+            # Auto-restart after rain
+            try:
+                self.auto_restart_delay_min = max(1, int(self.auto_restart_delay_var.get()))
+            except Exception:
+                pass
+            try:
+                self._apply_auto_restart_enabled(bool(self.auto_restart_enabled_var.get()))
+            except Exception:
+                pass
             # Weather Station (CR300)
             self.weather_api_base = self.weather_api_base_var.get().strip()
             self.weather_stream   = (self.weather_stream_var.get().strip() or "live")
@@ -3326,6 +3380,14 @@ class App(tk.Tk):
                 setattr(self, attr, None)
             elif cur > removed_idx:
                 setattr(self, attr, cur - 1)
+
+        # 4) รายการ index ที่รอ auto-restart (ลบตัวที่ถูกลบ, เลื่อนตัวที่มากกว่าลง 1)
+        pend = getattr(self, "_rain_stopped_programs", None)
+        if isinstance(pend, list):
+            self._rain_stopped_programs = [
+                (i - 1 if i > removed_idx else i)
+                for i in pend if i != removed_idx
+            ]
 
     def _update_program_tab_titles(self):
         for i, v in enumerate(self.programs):
@@ -4912,9 +4974,17 @@ class App(tk.Tk):
         self._sched_log(idx, "Program unlocked (Edit)")
 
     def start_program(self, idx: int):
-        if idx < 0 or idx >= len(self.programs): 
+        if idx < 0 or idx >= len(self.programs):
             return
         v = self.programs[idx]
+
+        # ผู้ใช้สั่ง Start เอง → เอา idx ออกจากรายการรอ auto-restart (ถือว่าจัดการเองแล้ว)
+        if not getattr(self, "_in_auto_restart", False):
+            try:
+                if idx in self._rain_stopped_programs:
+                    self._rain_stopped_programs.remove(idx)
+            except Exception:
+                pass
 
         if not self.laser:
             try:
@@ -5438,6 +5508,8 @@ class App(tk.Tk):
                 "rain_api_timeout":  float(getattr(self, "rain_api_timeout", 2.5)),
                 "rain_stale_sec":    float(getattr(self, "rain_stale_sec", 10.0)),
                 "rain_poll_interval": int(getattr(self, "rain_poll_interval", 1)),
+                "auto_restart_enabled":   bool(getattr(self, "auto_restart_enabled", False)),
+                "auto_restart_delay_min": int(getattr(self, "auto_restart_delay_min", 30)),
                 "weather_enabled":      bool(getattr(self, "weather_enabled", True)),
                 "weather_api_base":     getattr(self, "weather_api_base", ""),
                 "weather_api_timeout":  float(getattr(self, "weather_api_timeout", 5.0)),
@@ -5531,6 +5603,15 @@ class App(tk.Tk):
             self.rain_api_timeout  = float(data.get("rain_api_timeout",  getattr(self, "rain_api_timeout", 2.5)))
             self.rain_stale_sec    = float(data.get("rain_stale_sec",    getattr(self, "rain_stale_sec", 10.0)))
             self.rain_poll_interval = int(data.get("rain_poll_interval", getattr(self, "rain_poll_interval", 1)))
+            # Auto-restart after rain
+            self.auto_restart_enabled   = bool(data.get("auto_restart_enabled", getattr(self, "auto_restart_enabled", False)))
+            self.auto_restart_delay_min = int(data.get("auto_restart_delay_min", getattr(self, "auto_restart_delay_min", 30)))
+            if hasattr(self, "auto_restart_enabled_var"):
+                try: self.auto_restart_enabled_var.set(self.auto_restart_enabled)
+                except Exception: pass
+            if hasattr(self, "auto_restart_delay_var"):
+                try: self.auto_restart_delay_var.set(self.auto_restart_delay_min)
+                except Exception: pass
             # Weather Station (CR300)
             self.weather_enabled     = bool(data.get("weather_enabled", getattr(self, "weather_enabled", True)))
             self.weather_api_base    = data.get("weather_api_base", getattr(self, "weather_api_base", ""))
@@ -6054,6 +6135,12 @@ class App(tk.Tk):
             if hasattr(self, "_scan_stop_flag"):
                 self._scan_stop_flag.set()
             self._weather_poll_stop = True
+            self._auto_restart_stop = True
+            try:
+                if getattr(self, "_auto_restart_after_id", None) is not None:
+                    self.after_cancel(self._auto_restart_after_id)
+            except Exception:
+                pass
             self.stop_all_programs()
             self._stop_telemetry()
             # หยุด data logger + ปล่อยล็อกไฟล์
@@ -6258,6 +6345,10 @@ class App(tk.Tk):
                     ts         = self._format_rain_timestamp_utc7(data.get("timestamp", ""))
 
                     prev_raining = getattr(self, "_rain_is_raining", False)
+
+                    # บันทึกเวลาเห็นฝนล่าสุด (รีเซ็ตตัวนับ "แห้งต่อเนื่อง" ของ auto-restart)
+                    if is_raining:
+                        self._rain_last_wet_ts = time.monotonic()
 
                     # บันทึก cache
                     self._rain_is_raining = is_raining
@@ -6681,13 +6772,18 @@ class App(tk.Tk):
 
         self.log("🌧 Rain detected! Stopping all scheduled programs & closing roof if open.")
 
+        # บันทึกเวลาที่เห็นฝน (ใช้จับ "แห้งต่อเนื่อง N min" สำหรับ auto-restart)
+        self._rain_last_wet_ts = now_mono
+
         # 1. STOP ทุกโปรแกรมที่กำลังรัน
         # ใช้ _batch_stopping เพื่อไม่ให้ stop_program แต่ละตัวสั่งปิดหลังคาซ้ำ (ปิดเองด้านล่าง)
+        stopped_now = []
         self._batch_stopping = True
         try:
             for idx, v in enumerate(self.programs):
                 if v.get("runner") and v["runner"].is_alive():
                     self._sched_log(idx, "⛔ Stopped by Rain Sensor")
+                    stopped_now.append(idx)
                     try:
                         self.stop_program(idx)
                     except Exception as e:
@@ -6698,6 +6794,18 @@ class App(tk.Tk):
                         pass
         finally:
             self._batch_stopping = False
+
+        # จำโปรแกรมที่ถูกหยุดเพราะฝน (union กับที่ค้างอยู่) ไว้ให้ auto-restart
+        if stopped_now:
+            pend = list(getattr(self, "_rain_stopped_programs", []))
+            for i in stopped_now:
+                if i not in pend:
+                    pend.append(i)
+            self._rain_stopped_programs = pend
+            if getattr(self, "auto_restart_enabled", False):
+                mins = int(getattr(self, "auto_restart_delay_min", 30))
+                self.log(f"🔁 Auto-restart armed: will start programs {[i+1 for i in pend]} "
+                         f"if it stays dry for {mins} min")
 
         # ยกเลิก delayed roof close ที่ค้างอยู่ (ถ้ามี) — เดี๋ยวจะสั่งปิดเองด้านล่างแล้ว
         try:
@@ -6729,6 +6837,113 @@ class App(tk.Tk):
         if now_mono - last_popup >= cooldown:
             now_txt = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
             self.after(100, lambda t=now_txt: self._show_rain_popup(t))
+
+    # ------------------------------------------------------------------ #
+    #  Auto-restart after rain clears (optional feature)                   #
+    # ------------------------------------------------------------------ #
+    def _auto_restart_ready(self, now_mono: float) -> bool:
+        """คืน True ถ้าเงื่อนไขพร้อม start โปรแกรมที่ถูกหยุดเพราะฝนกลับมา
+        (pure function — ทดสอบได้) เงื่อนไขทั้งหมดต้องจริง:
+          - ฟีเจอร์เปิด + มีโปรแกรมค้างรอ restart
+          - Laser เชื่อมต่ออยู่ (ไม่งั้น start_program จะเด้ง modal)
+          - Rain Sensor เปิด + online + ไม่มีฝนตอนนี้ (ต้องมั่นใจว่าแห้งจริง)
+          - แห้งต่อเนื่อง >= auto_restart_delay_min min
+        """
+        if not getattr(self, "auto_restart_enabled", False):
+            return False
+        if not getattr(self, "_rain_stopped_programs", None):
+            return False
+        if not getattr(self, "laser", None):
+            return False
+        if not getattr(self, "rain_enabled", True):
+            return False          # rain sensor ปิด → ยืนยันแห้งไม่ได้ → ไม่ auto start
+        if not getattr(self, "_rain_online", False):
+            return False          # sensor offline → ยืนยันไม่ได้
+        # ❗ ต้องมีข้อมูลฝน 'สด' จริง — กัน auto-start จากค่าค้างเมื่อ rain API ล่ม
+        # (ตอน API ล้มเหลว _rain_online/_rain_is_raining ไม่ถูกอัปเดต แต่ _rain_last_ok_ts จะเก่า)
+        last_ok = getattr(self, "_rain_last_ok_ts", None)
+        fresh = max(float(getattr(self, "rain_stale_sec", 10.0)), 5.0)
+        if last_ok is None or (now_mono - last_ok) > fresh:
+            return False
+        if self.is_raining_now():
+            return False
+        wet = getattr(self, "_rain_last_wet_ts", None)
+        if wet is None:
+            return False
+        delay_sec = max(1.0, float(getattr(self, "auto_restart_delay_min", 30)) * 60.0)
+        return (now_mono - wet) >= delay_sec
+
+    def _auto_restart_tick(self):
+        """ตรวจทุก ~15 วิ ว่าควร auto-restart ไหม (main thread)"""
+        if getattr(self, "_auto_restart_stop", False):
+            return
+        try:
+            if self._auto_restart_ready(time.monotonic()):
+                self._do_auto_restart()
+        except Exception as e:
+            try:
+                self.log(f"auto-restart tick error: {e}")
+            except Exception:
+                pass
+        if not getattr(self, "_auto_restart_stop", False):
+            self._auto_restart_after_id = self.after(15000, self._auto_restart_tick)
+
+    def _do_auto_restart(self):
+        """start โปรแกรมที่ค้างรอ restart
+        เก็บตัวที่ยัง start ไม่ได้ (ถูกปิด Enable / start ถูกปฏิเสธ) ไว้ลองใหม่รอบหน้า
+        (ไม่ทิ้ง pending ทั้งก้อน — กันโปรแกรมหายถาวรถ้า start รอบนี้ไม่สำเร็จ)"""
+        pending = list(getattr(self, "_rain_stopped_programs", []))
+        if not pending:
+            return
+        mins = int(getattr(self, "auto_restart_delay_min", 30))
+        restarted = []
+        remaining = []
+        self._in_auto_restart = True
+        try:
+            for idx in pending:
+                if not (0 <= idx < len(self.programs)):
+                    continue                       # index เพี้ยน → ทิ้ง
+                v = self.programs[idx]
+                if v.get("runner") and v["runner"].is_alive():
+                    continue                       # รันอยู่แล้ว → เอาออกจาก pending
+                try:
+                    if not v["enabled"].get():
+                        remaining.append(idx)      # ถูกปิด Enable → คงไว้ เผื่อเปิดใหม่
+                        continue
+                except Exception:
+                    pass
+                try:
+                    self.start_program(idx)
+                except Exception as e:
+                    self._sched_log(idx, f"auto-restart error: {e}")
+                    remaining.append(idx)          # start error → คงไว้ลองใหม่
+                    continue
+                # start_program อาจถูกปฏิเสธเงียบ ๆ (laser หลุด ฯลฯ) → เช็คว่าเริ่มจริง
+                if v.get("runner") and v["runner"].is_alive():
+                    restarted.append(idx + 1)
+                    self._sched_log(idx, f"☀ Auto-restarted (dry for {mins} min)")
+                else:
+                    remaining.append(idx)          # ไม่ได้เริ่มจริง → คงไว้ลองใหม่
+        finally:
+            self._in_auto_restart = False
+        self._rain_stopped_programs = remaining
+        if restarted:
+            self.log(f"☀ Stayed dry for {mins} min → auto-starting programs {restarted}")
+
+    def _apply_auto_restart_enabled(self, enabled: bool):
+        """เปิด/ปิดฟีเจอร์ auto-restart (tick รันตลอด แต่จะทำงานเฉพาะตอนเปิด)
+        idempotent — ทำงาน/log เฉพาะเมื่อสถานะเปลี่ยนจริง (กัน log ซ้ำทุกครั้งที่ Apply)"""
+        new = bool(enabled)
+        old = bool(getattr(self, "auto_restart_enabled", False))
+        self.auto_restart_enabled = new
+        if new == old:
+            return
+        if not new:
+            # ปิดฟีเจอร์ → ล้างรายการค้าง (ผู้ใช้ต้อง start เอง)
+            self._rain_stopped_programs = []
+            self.log("🔁 Auto-restart: disabled")
+        else:
+            self.log(f"🔁 Auto-restart: enabled (dry wait {int(getattr(self,'auto_restart_delay_min',30))} min)")
 
     def _show_rain_popup(self, now_txt: str):
         """
