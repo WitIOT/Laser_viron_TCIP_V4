@@ -1299,37 +1299,47 @@ class TestAutoRestartReindex:
 
 
 # --------------------------------------------------------------------- #
-#  App-side rain decision from intensity (optional override)
+#  App-side rain decision source (api | intensity | either)
 # --------------------------------------------------------------------- #
-class TestRainIntensityOverride:
-    def _app(self, override=True, thr=0.2):
+class TestRainDecisionMode:
+    def _app(self, mode="api", thr=0.2):
         app = make_app()
-        app.rain_intensity_override = override
+        app.rain_decision_mode = mode
         app.rain_intensity_threshold = thr
         return app
 
-    def test_api_true_always_raining(self):
-        app = self._app(override=False)
+    # ---- mode "api": use is_raining only ----
+    def test_api_mode_uses_flag(self):
+        app = self._app("api", thr=0.2)
         assert app._decide_raining(True, 0.0) is True
+        assert app._decide_raining(False, 5.0) is False    # ignores intensity
 
-    def test_override_triggers_above_threshold(self):
-        app = self._app(override=True, thr=0.2)
+    # ---- mode "intensity": use threshold only ----
+    def test_intensity_mode_uses_threshold(self):
+        app = self._app("intensity", thr=0.2)
         assert app._decide_raining(False, 0.2) is True     # == threshold
-        assert app._decide_raining(False, 1.5) is True
-
-    def test_override_below_threshold_not_raining(self):
-        app = self._app(override=True, thr=0.2)
         assert app._decide_raining(False, 0.1) is False
-        assert app._decide_raining(False, 0.0) is False
+        assert app._decide_raining(True, 0.0) is False     # ignores API flag
 
-    def test_override_disabled_ignores_intensity(self):
-        app = self._app(override=False, thr=0.2)
+    def test_intensity_mode_threshold_zero_disabled(self):
+        app = self._app("intensity", thr=0.0)
         assert app._decide_raining(False, 5.0) is False
+        assert app._decide_raining(True, 5.0) is False
 
-    def test_threshold_zero_disables_override(self):
-        app = self._app(override=True, thr=0.0)
-        assert app._decide_raining(False, 5.0) is False    # thr must be > 0
+    # ---- mode "either": API flag OR threshold ----
+    def test_either_mode_any_condition(self):
+        app = self._app("either", thr=0.2)
+        assert app._decide_raining(True, 0.0) is True      # API flag
+        assert app._decide_raining(False, 0.5) is True     # intensity
+        assert app._decide_raining(False, 0.1) is False    # neither
 
+    # ---- safety ----
     def test_bad_intensity_is_safe(self):
-        app = self._app(override=True, thr=0.2)
-        assert app._decide_raining(False, float("nan")) is False  # nan >= thr is False
+        app = self._app("either", thr=0.2)
+        assert app._decide_raining(False, float("nan")) is False
+        assert app._decide_raining(True, float("nan")) is True   # API flag still wins
+
+    def test_unknown_mode_falls_back_to_api(self):
+        app = self._app("bogus", thr=0.2)
+        assert app._decide_raining(True, 0.0) is True
+        assert app._decide_raining(False, 9.0) is False
