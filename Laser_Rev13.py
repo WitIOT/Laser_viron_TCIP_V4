@@ -568,7 +568,7 @@ class App(tk.Tk):
         self._rain_last_ok_ts: float | None = None   # monotonic time ของการอ่านสำเร็จล่าสุด
         self._rain_fail_count: int = 0               # จำนวน consecutive failures
         self._rain_popup_ts: float = 0.0             # monotonic time ที่แสดง popup ล่าสุด (cooldown กัน popup ซ้ำ)
-        self._RAIN_POPUP_COOLDOWN: float = 300.0     # วินาที — ห้ามแสดง popup ซ้ำภายใน 5 นาที
+        self._RAIN_POPUP_COOLDOWN: float = 300.0     # วินาที — ห้ามแสดง popup ซ้ำภายใน 5 min
         # _rain_monitor_stop ถูกลบออก (ไม่ได้ใช้งาน — ใช้ _rain_poll_stop แทน)
 
           # ใช้ bool สำหรับหยุด polling ใน _poll_roof_status()
@@ -668,7 +668,7 @@ class App(tk.Tk):
 
         # --- Data Logger (CSV ต่อเนื่อง วันละ 1 ไฟล์ ล็อกไม่ให้คนอื่นแก้) ---
         self.datalog_enabled   = True
-        self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 นาที)
+        self.datalog_interval  = 300        # วินาที (ค่าเริ่มต้น 5 min)
         self.datalog_dir       = ""         # ว่าง = ใช้ Logs directory เดียวกับระบบ
         self._datalog_stop     = threading.Event()
         self._datalog_after_id = None       # id ของ after() ลูปบันทึก
@@ -810,7 +810,7 @@ class App(tk.Tk):
         """
         if _updater is None:
             if manual:
-                messagebox.showinfo("Updates", "โมดูล updater ไม่พร้อมใช้งาน")
+                messagebox.showinfo("Updates", "Updater module is not available")
             return
 
         def on_result(info, err=None):
@@ -820,7 +820,7 @@ class App(tk.Tk):
             _updater.check_for_update_async(on_result)
         except Exception as e:
             if manual:
-                self.after(0, lambda: messagebox.showerror("Updates", f"เช็คอัปเดตไม่สำเร็จ:\n{e}"))
+                self.after(0, lambda: messagebox.showerror("Updates", f"Update check failed:\n{e}"))
 
     def _on_update_check_result(self, info, manual: bool, err=None):
         # เช็คไม่สำเร็จ (เน็ต/timeout/HTTP) — แยกจาก 'เป็นล่าสุดแล้ว'
@@ -828,9 +828,9 @@ class App(tk.Tk):
             if manual:
                 messagebox.showwarning(
                     "Updates",
-                    "เช็คอัปเดตไม่สำเร็จ\n"
+                    "Update check failed\n"
                     f"{err}\n\n"
-                    "ตรวจการเชื่อมต่ออินเทอร์เน็ต/พร็อกซี แล้วลองใหม่"
+                    "Check your internet/proxy connection and try again"
                 )
             return
 
@@ -838,7 +838,7 @@ class App(tk.Tk):
             if manual:
                 messagebox.showinfo(
                     "Updates",
-                    f"คุณใช้เวอร์ชันล่าสุดแล้ว (v{APP_VERSION})"
+                    f"You are on the latest version (v{APP_VERSION})"
                 )
             return
 
@@ -847,11 +847,11 @@ class App(tk.Tk):
         if len(notes) > 500:
             notes = notes[:500] + " ..."
         msg = (
-            f"พบเวอร์ชันใหม่: {info.version}\n"
-            f"เวอร์ชันปัจจุบัน: v{APP_VERSION}\n\n"
+            f"New version available: {info.version}\n"
+            f"Current version: v{APP_VERSION}\n\n"
             f"{notes}\n\n"
-            "ต้องการดาวน์โหลดและอัปเดตตอนนี้เลยไหม?\n"
-            "(แอปจะปิดชั่วครู่แล้วเปิดใหม่อัตโนมัติ)"
+            "Download and update now?\n"
+            "(The app will briefly close and reopen automatically)"
         )
         if not messagebox.askyesno("Update available", msg):
             return
@@ -859,8 +859,8 @@ class App(tk.Tk):
         if not _updater.is_frozen():
             messagebox.showinfo(
                 "Updates",
-                "กำลังรันจากซอร์ส (.py) — อัปเดตอัตโนมัติใช้ได้เฉพาะเวอร์ชันที่ติดตั้ง (.exe)\n"
-                f"ดาวน์โหลดเองได้ที่:\n{info.html_url}"
+                "Running from source (.py) — auto-update works only for the installed version (.exe)\n"
+                f"Download manually at:\n{info.html_url}"
             )
             return
 
@@ -873,7 +873,7 @@ class App(tk.Tk):
         win.geometry("360x120")
         win.resizable(False, False)
         win.transient(self)
-        ttk.Label(win, text=f"กำลังดาวน์โหลด {info.version} ...").pack(anchor="w", padx=14, pady=(14, 6))
+        ttk.Label(win, text=f"Downloading {info.version} ...").pack(anchor="w", padx=14, pady=(14, 6))
         pb = ttk.Progressbar(win, mode="determinate", maximum=100, length=320)
         pb.pack(padx=14, pady=4)
         pct = ttk.Label(win, text="0%")
@@ -890,7 +890,7 @@ class App(tk.Tk):
                 self.after(300, self._shutdown_for_update)
             except Exception as e:
                 self.after(0, lambda: (win.destroy(),
-                                       messagebox.showerror("Update failed", f"อัปเดตไม่สำเร็จ:\n{e}")))
+                                       messagebox.showerror("Update failed", f"Update failed:\n{e}")))
 
         threading.Thread(target=worker, daemon=True, name="UpdateApply").start()
 
@@ -1361,7 +1361,7 @@ class App(tk.Tk):
         self._term_entry.bind("<Down>",   self._term_hist_down)
 
         self._term_print("info", "Terminal ready. Type a command (e.g. $STATUS ?) and press Enter or Send.")
-        self._term_print("info", "Arrow Up/Down เลือกคำสั่งที่เคยส่ง  |  Quick buttons ด้านบนสำหรับคำสั่งที่ใช้บ่อย")
+        self._term_print("info", "Arrow Up/Down to recall previous commands  |  Quick buttons above for common commands")
 
     def _term_print(self, tag: str, text: str):
         def _insert():
@@ -1449,7 +1449,7 @@ class App(tk.Tk):
         ttk.Label(conn_cfg, text="Port").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         port_entry = ttk.Entry(conn_cfg, textvariable=self.port_var, width=10)
         port_entry.grid(row=1, column=1, sticky="w", padx=6, pady=6)
-        ttk.Label(conn_cfg, text=f"(ไม่ระบุก็ได้ — ค่าเริ่มต้น {DEFAULT_LASER_PORT})",
+        ttk.Label(conn_cfg, text=f"(optional — default {DEFAULT_LASER_PORT})",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6, pady=6)
 
         ttk.Label(conn_cfg, text="User").grid(row=2, column=0, sticky="w", padx=6, pady=6)
@@ -1546,14 +1546,14 @@ class App(tk.Tk):
         ttk.Entry(logs_lf, textvariable=self.monday_warmup_threshold_var, width=12).grid(row=4, column=1, sticky="w", padx=6, pady=6)
 
         # ---- [RIGHT COL 1] Data Logger (continuous CSV) ----
-        dlog_lf = ttk.LabelFrame(parent, text="Data Logger (CSV ต่อเนื่อง — วันละ 1 ไฟล์)")
+        dlog_lf = ttk.LabelFrame(parent, text="Data Logger (continuous CSV — one file per day)")
         dlog_lf.grid(row=2, column=1, sticky="nwe", padx=10, pady=(0, 10))
         dlog_lf.columnconfigure(1, weight=1)
         self._ui_refs["cfg_datalog_frame"] = dlog_lf
 
         def _toggle_datalog():
             self._apply_datalog_enabled(bool(self.datalog_enabled_var.get()))
-        ttk.Checkbutton(dlog_lf, text="เปิดบันทึก Data Logger อัตโนมัติ (ล็อกไฟล์กันแก้ไข)",
+        ttk.Checkbutton(dlog_lf, text="Enable Data Logger automatically (lock file against edits)",
                         variable=self.datalog_enabled_var,
                         command=_toggle_datalog
                         ).grid(row=0, column=0, columnspan=3, sticky="w", padx=6, pady=(6, 2))
@@ -1571,13 +1571,13 @@ class App(tk.Tk):
                 pass
         ttk.Button(dlog_lf, text="Browse", command=_browse_datalog_dir).grid(
             row=1, column=2, padx=6, pady=5)
-        ttk.Label(dlog_lf, text="เว้นว่าง = ใช้ Logs directory เดียวกับระบบ",
+        ttk.Label(dlog_lf, text="Leave empty = use the system Logs directory",
                   foreground="gray").grid(row=2, column=1, columnspan=2, sticky="w", padx=4)
 
         ttk.Label(dlog_lf, text="Log interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(dlog_lf, textvariable=self.datalog_interval_var, width=8).grid(
             row=3, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(dlog_lf, text="ความถี่บันทึก (ค่าเริ่มต้น 300 = 5 นาที)",
+        ttk.Label(dlog_lf, text="Logging interval (default 300 = 5 min)",
                   foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
 
         ttk.Label(dlog_lf, text="Status:").grid(row=4, column=0, sticky="w", padx=6, pady=(0, 6))
@@ -1585,8 +1585,7 @@ class App(tk.Tk):
                   foreground="gray").grid(row=4, column=1, columnspan=2, sticky="w", padx=4, pady=(0, 6))
 
         ttk.Label(dlog_lf,
-                  text="บันทึกตลอดเวลา (มีคอลัมน์สถานะ Laser) · ไฟล์ datalog_YYYYMMDD.csv\n"
-                       "ขณะบันทึก คนอื่นเปิดอ่านได้แต่แก้ไข/ลบไม่ได้ จนกว่าจะปิดโปรแกรม",
+                  text="Logs continuously (includes Laser status column) · file datalog_YYYYMMDD.csv\nWhile logging, others can read but cannot edit/delete it until the app closes",
                   foreground="gray", justify="left").grid(
             row=5, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
@@ -1600,13 +1599,13 @@ class App(tk.Tk):
                 pass
         self.schedlog_enabled_cb = ttk.Checkbutton(
             dlog_lf,
-            text="บันทึก Schedule/Event logs เป็น JSON (schedule_YYYYMMDD.jsonl)",
+            text="Log Schedule/Event entries as JSON (schedule_YYYYMMDD.jsonl)",
             variable=self.schedlog_enabled_var,
             command=_toggle_schedlog)
         self.schedlog_enabled_cb.grid(row=7, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 2))
         self._ui_refs["cfg_schedlog_cb"] = self.schedlog_enabled_cb
         ttk.Label(dlog_lf,
-                  text="บันทึกเหตุการณ์โปรแกรม/ตารางเวลาแบบ 1 บรรทัด = 1 เหตุการณ์ (ไว้ตรวจย้อนหลัง)",
+                  text="Logs program/schedule events, one line per event (for later review)",
                   foreground="gray", justify="left").grid(
             row=8, column=0, columnspan=3, sticky="w", padx=6, pady=(0, 6))
 
@@ -1630,15 +1629,15 @@ class App(tk.Tk):
 
         ttk.Label(sensor_lf, text="Request timeout (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(sensor_lf, textvariable=self.sensor_timeout_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="HTTP timeout ต่อ request", foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="HTTP timeout per request", foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
         ttk.Label(sensor_lf, text="Poll interval (s):").grid(row=3, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(sensor_lf, textvariable=self.sensor_interval_var, width=8).grid(row=3, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="ความถี่ดึงข้อมูล (แนะนำ 5–30 วินาที)", foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="Fetch interval (recommended 5–30 s)", foreground="gray").grid(row=3, column=2, sticky="w", padx=6)
 
         ttk.Label(sensor_lf, text="Stale threshold (s):").grid(row=4, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(sensor_lf, textvariable=self.sensor_stale_var, width=8).grid(row=4, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(sensor_lf, text="นานแค่ไหนก่อนแสดง N/A เมื่ออ่านไม่ได้", foreground="gray").grid(row=4, column=2, sticky="w", padx=6)
+        ttk.Label(sensor_lf, text="How long before showing N/A when unreadable", foreground="gray").grid(row=4, column=2, sticky="w", padx=6)
 
         # ---- [LEFT COL 0] Rain Sensor Settings ----
         rain_lf = ttk.LabelFrame(parent, text="Rain Sensor Settings")
@@ -1665,17 +1664,17 @@ class App(tk.Tk):
 
         ttk.Label(rain_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(rain_timing, textvariable=self.rain_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(rain_timing, text="HTTP timeout ต่อ request (แนะนำ 1.5–5)",
+        ttk.Label(rain_timing, text="HTTP timeout per request (recommended 1.5–5)",
                   foreground="gray").grid(row=0, column=2, sticky="w", padx=6)
 
         ttk.Label(rain_timing, text="Stale threshold (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(rain_timing, textvariable=self.rain_stale_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(rain_timing, text="นานแค่ไหนก่อนแสดง N/A เมื่ออ่านไม่ได้ (แนะนำ 5–30)",
+        ttk.Label(rain_timing, text="How long before showing N/A when unreadable (recommended 5–30)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
 
         ttk.Label(rain_timing, text="Poll interval (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(rain_timing, textvariable=self.rain_interval_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(rain_timing, text="ความถี่ดึงข้อมูล (แนะนำ 1–5 วินาที)",
+        ttk.Label(rain_timing, text="Fetch interval (recommended 1–5 s)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
         # ---- [FULL WIDTH row 4] Weather Station (CR300) Settings ----
@@ -1695,13 +1694,13 @@ class App(tk.Tk):
         ttk.Label(wx_lf, text="weather_api_base").grid(row=1, column=0, sticky="w", padx=6, pady=6)
         ttk.Entry(wx_lf, textvariable=self.weather_api_base_var, width=50).grid(
             row=1, column=1, sticky="we", padx=6, pady=6)
-        ttk.Label(wx_lf, text="(เช่น http://192.168.3.77:8000 หรือ .../api/cr300 — วาง .../live เต็มก็ได้)",
+        ttk.Label(wx_lf, text="(e.g. http://192.168.3.77:8000 or .../api/cr300 — a full .../live URL also works)",
                   foreground="gray").grid(row=1, column=2, padx=6, sticky="w")
 
         ttk.Label(wx_lf, text="Stream").grid(row=2, column=0, sticky="w", padx=6, pady=6)
         ttk.Combobox(wx_lf, textvariable=self.weather_stream_var, width=12, state="readonly",
                      values=("live", "averaged")).grid(row=2, column=1, sticky="w", padx=6, pady=6)
-        ttk.Label(wx_lf, text="live = เรียลไทม์ ~60s · averaged = เฉลี่ยรายชั่วโมง",
+        ttk.Label(wx_lf, text="live = real-time ~60s · averaged = hourly average",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
         wx_timing = ttk.LabelFrame(wx_lf, text="Weather Timing")
@@ -1710,17 +1709,17 @@ class App(tk.Tk):
 
         ttk.Label(wx_timing, text="Request timeout (s):").grid(row=0, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(wx_timing, textvariable=self.weather_timeout_var, width=8).grid(row=0, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(wx_timing, text="HTTP timeout ต่อ request (แนะนำ 3–10)",
+        ttk.Label(wx_timing, text="HTTP timeout per request (recommended 3–10)",
                   foreground="gray").grid(row=0, column=2, sticky="w", padx=6)
 
         ttk.Label(wx_timing, text="Poll interval (s):").grid(row=1, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(wx_timing, textvariable=self.weather_interval_var, width=8).grid(row=1, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(wx_timing, text="ความถี่ดึงข้อมูล (live แนะนำ 30–60, averaged 300–600)",
+        ttk.Label(wx_timing, text="Fetch interval (live 30–60, averaged 300–600)",
                   foreground="gray").grid(row=1, column=2, sticky="w", padx=6)
 
         ttk.Label(wx_timing, text="Stale threshold (s):").grid(row=2, column=0, sticky="w", padx=6, pady=5)
         ttk.Entry(wx_timing, textvariable=self.weather_stale_var, width=8).grid(row=2, column=1, sticky="w", padx=4, pady=5)
-        ttk.Label(wx_timing, text="นานแค่ไหนก่อนแสดง Offline เมื่อไม่มีข้อมูลใหม่ (แนะนำ 180–600)",
+        ttk.Label(wx_timing, text="How long before showing Offline when no new data (recommended 180–600)",
                   foreground="gray").grid(row=2, column=2, sticky="w", padx=6)
 
         btns = ttk.Frame(parent)
@@ -2662,7 +2661,7 @@ class App(tk.Tk):
                 self.monday_warmup_enabled = bool(getattr(self, "monday_warmup_enabled", False))
 
             self.log(
-                "Apply Config: อัปเดต roof_api_base / limit_api_url / logs directory แล้ว | "
+                "Apply Config: updated roof_api_base / limit_api_url / logs directory | "
                 f"Safety Fire = {'ON' if self._is_safety_fire_enabled() else 'OFF'}"
             )
             self._update_roof_auto_label()
@@ -2676,7 +2675,7 @@ class App(tk.Tk):
 
         except Exception as e:
             try:
-                self.log(f"Apply Config ล้มเหลว: {e}")
+                self.log(f"Apply Config failed: {e}")
             except Exception:
                 pass
 
@@ -2859,285 +2858,170 @@ class App(tk.Tk):
         def show_after_temp(): self._tut_demo_temp_clear(); main()
 
         steps = [
-            {"title": "ยินดีต้อนรับ — คู่มือใช้งาน Laser Control",
-             "body": ("คู่มือนี้พาชมทุกปุ่ม/ทุกค่า ทุกแท็บ พร้อม 'สาธิตกรอกค่าตัวอย่าง'\n"
-                      "(กรอกให้ดูเฉย ๆ ปลอดภัย ไม่ต่อเลเซอร์จริง คืนค่าเดิมเมื่อปิดคู่มือ)\n\n"
-                      "ลำดับใช้งาน: ตั้งค่าเชื่อมต่อ → Connect → ตั้งค่าเลเซอร์ →\n"
-                      "ตั้งโปรแกรม/ยิงมือ → เปิดหลังคา → ยิง → ดูกราฟ/บันทึก\n\n"
-                      "วงกลมแดงชี้จุดที่อธิบาย • กด Next เพื่อไปต่อ"),
+            {"title": "Welcome — Laser Control user guide",
+             "body": ("This guide walks through every button/value on every tab, with a 'sample-value demo'\n(Fills values for show only — safe, not sent to the real laser; originals are restored when the guide closes)\n\nUsage order: set up connection → Connect → set laser parameters →\nset a program/manual fire → open roof → fire → watch charts/logs\n\nThe red circle points at what is being explained • press Next to continue"),
              "widget": "connect_btn", "on_show": main},
 
             # ================= TAB: Test Connection =================
-            {"title": "แท็บ Test Connection — ฟอร์มเชื่อมต่อ",
-             "body": ("กรอกข้อมูลเชื่อมต่อเลเซอร์:\n"
-                      "• IP Address = IP เลเซอร์ (เช่น 192.168.103.103)\n"
-                      "• Port = พอร์ต TCP (มาตรฐาน 23)\n"
-                      "• Login User / Password = บัญชีเข้าเครื่อง (ติ๊ก Show ดูรหัสได้)\n"
-                      "ปุ่ม: Apply & Save (บันทึก), Test Connection (ทดสอบ), Connect Now (ต่อเลย)"),
+            {"title": "Test Connection tab — connection form",
+             "body": ("Enter the laser connection details:\n• IP Address = laser IP (e.g. 192.168.103.103)\n• Port = TCP port (default 23)\n• Login User / Password = device account (tick Show to reveal the password)\nButtons: Apply & Save, Test Connection, Connect Now"),
              "widget": "cs_ip_entry", "on_show": conn},
 
             {"title": "Test Connection — Quick Presets",
-             "body": ("ปุ่มลัดตั้งค่าเชื่อมต่อสำเร็จรูป:\n"
-                      "• Viron Default = IP/Port มาตรฐานของเครื่อง Viron\n"
-                      "• Localhost Test = 127.0.0.1 (ทดสอบในเครื่อง)\n"
-                      "กดแล้วช่อง IP/Port จะถูกเติมให้อัตโนมัติ"),
+             "body": ("Preset connection shortcuts:\n• Viron Default = standard IP/Port for the Viron device\n• Localhost Test = 127.0.0.1 (local test)\nPressing one auto-fills the IP/Port fields"),
              "widget": "cs_preset_frame", "on_show": conn, "shape": R},
 
             {"title": "Test Connection — Saved Profiles",
-             "body": ("บันทึกชุดการตั้งค่าไว้หลายชุด:\n"
-                      "• ตั้งชื่อ Profile → Save Profile\n"
-                      "• เลือกจากรายการ → Load Selected (โหลดกลับมาใช้)\n"
-                      "• Delete Selected = ลบชุดที่เลือก\n"
-                      "เหมาะเวลาสลับใช้เลเซอร์หลายเครื่อง"),
+             "body": ("Save multiple setting profiles:\n• Name a Profile → Save Profile\n• Pick from the list → Load Selected\n• Delete Selected = remove the selected profile\nHandy when switching between several lasers"),
              "widget": "cs_profile_frame", "on_show": conn, "shape": R},
 
             # ================= TAB: Network Scanner =================
-            {"title": "แท็บ Network Scanner — ตั้งค่าสแกน",
-             "body": ("ใช้หา IP เลเซอร์อัตโนมัติเมื่อไม่ทราบ:\n"
-                      "• Subnet = วงเครือข่าย (เช่น 192.168.1)\n"
-                      "• Timeout = รอกี่วินาทีต่อ IP (0.3 กำลังดี)\n"
-                      "• Range = ช่วงเลขท้าย IP ที่จะสแกน (1–254)\n"
-                      "สแกนแบบ Ping ทุกเครื่องเหมือน Advanced IP Scanner"),
+            {"title": "Network Scanner tab — scan settings",
+             "body": ("Find the laser IP automatically when unknown:\n• Subnet = network prefix (e.g. 192.168.1)\n• Timeout = seconds to wait per IP (0.3 is fine)\n• Range = last-octet range to scan (1–254)\nPings every host, like Advanced IP Scanner"),
              "widget": "scan_subnet_entry", "on_show": netscan},
 
-            {"title": "Network Scanner — เริ่มสแกน",
-             "body": ("• Start Scan = เริ่มไล่หาอุปกรณ์ในวง LAN\n"
-                      "• Stop = หยุดสแกนกลางคัน\n"
-                      "แถบ progress + สถานะจะบอกว่าสแกนถึงไหน เจอกี่เครื่อง"),
+            {"title": "Network Scanner — start scanning",
+             "body": ("• Start Scan = begin searching the LAN for devices\n• Stop = stop the scan midway\nThe progress bar + status show how far it has gone and how many devices were found"),
              "widget": "scan_start_btn", "on_show": netscan},
 
-            {"title": "Network Scanner — ผลลัพธ์",
-             "body": ("ตาราง (เหมือน Advanced IP Scanner): Status / Name / IP /\n"
-                      "Manufacturer / MAC address / Comments\n"
-                      "• ช่อง 🔍 Search = กรองตาราง (IP / MAC / Name / Manufacturer)\n"
-                      "• คลิกหัวคอลัมน์เพื่อจัดเรียง · แถบล่างบอก alive/dead\n"
-                      "• ดับเบิลคลิกแถว (หรือ Use Selected IP) → นำ IP ไปใส่ให้อัตโนมัติ\n"
-                      "• Clear Results = ล้างผลลัพธ์\n"
-                      "จากนั้นไปกด Connect ที่แท็บ Main ได้เลย"),
+            {"title": "Network Scanner — results",
+             "body": ("Table (like Advanced IP Scanner): Status / Name / IP /\nManufacturer / MAC address / Comments\n• 🔍 Search box = filter the table (IP / MAC / Name / Manufacturer)\n• Click a column header to sort · the bottom bar shows alive/dead\n• Double-click a row (or Use Selected IP) → auto-fill that IP\n• Clear Results = clear the list\nThen press Connect on the Main tab"),
              "widget": "scan_results_tree", "on_show": netscan, "shape": R},
 
             # ================= TAB: Settings / Config =================
-            {"title": "แท็บ Settings/Config — Laser Connection",
-             "body": ("ตั้งค่า IP / Port / User ของเลเซอร์ (ซิงก์กับแท็บ Test Connection)\n"
-                      "แก้ที่นี่หรือที่ Test Connection ก็ได้ ค่าจะตรงกัน"),
+            {"title": "Settings/Config tab — Laser Connection",
+             "body": ("Set the laser IP / Port / User (synced with the Test Connection tab)\nEdit here or on Test Connection — the values stay in sync"),
              "widget": "cfg_conn_frame", "on_show": cfg, "shape": R},
 
-            {"title": "Settings/Config — Roof Settings (สำคัญ)",
-             "body": ("ตั้งค่าระบบหลังคา + ความปลอดภัย:\n"
-                      "• roof_api_base / limit_api_url = ที่อยู่ API เปิด-ปิด/อ่านสถานะหลังคา\n"
-                      "• Pre-open lead (แนะนำ 15s) = เปิดหลังคาล่วงหน้าก่อนยิง\n"
-                      "• Post-close delay (แนะนำ 3-5s) = ปิดหลังคาหลังพัก\n"
-                      "• Enable Safety Fire = บล็อกการยิงถ้าหลังคายังไม่เปิด (ควรเปิดไว้)"),
+            {"title": "Settings/Config — Roof Settings (important)",
+             "body": ("Configure the roof system + safety:\n• roof_api_base / limit_api_url = API for opening/closing and reading roof status\n• Pre-open lead (recommended 15s) = open the roof ahead of firing\n• Post-close delay (recommended 3-5s) = close the roof after rest\n• Enable Safety Fire = block firing if the roof is not open (keep this on)"),
              "widget": "cfg_roof_frame", "on_show": cfg, "shape": R},
 
             {"title": "Settings/Config — Temp & RH Sensor",
-             "body": ("ตั้งค่าเซ็นเซอร์อุณหภูมิ/ความชื้น:\n"
-                      "• sensor_api_url = ที่อยู่ API ของเซ็นเซอร์\n"
-                      "• Request timeout / Poll interval / Stale threshold\n"
-                      "• Poll แนะนำ 5–30 วินาที (ถี่ไปโหลดเครือข่าย)"),
+             "body": ("Configure the temperature/humidity sensor:\n• sensor_api_url = sensor API address\n• Request timeout / Poll interval / Stale threshold\n• Poll recommended 5–30 s (too frequent loads the network)"),
              "widget": "cfg_sensor_frame", "on_show": cfg, "shape": R},
 
             {"title": "Settings/Config — Rain Sensor",
-             "body": ("ตั้งค่าเซ็นเซอร์ฝน (ตัวสั่งหยุดฉุกเฉินเมื่อฝนตก):\n"
-                      "• rain_api_url = ที่อยู่ API เซ็นเซอร์ฝน\n"
-                      "• Timeout / Stale / Poll interval (Poll แนะนำ 1–5s ให้ไวต่อฝน)\n"
-                      "เมื่อฝนตกระบบจะ STOP โปรแกรม+ปิดหลังคา+ดับเลเซอร์อัตโนมัติ"),
+             "body": ("Configure the rain sensor (emergency stop when it rains):\n• rain_api_url = rain sensor API address\n• Timeout / Stale / Poll interval (Poll 1–5s to react quickly to rain)\nWhen it rains the system auto-STOPs programs, closes the roof, and standbys the laser"),
              "widget": "cfg_rain_frame", "on_show": cfg, "shape": R},
 
-            {"title": "Settings/Config — บันทึก",
-             "body": ("แก้ค่าในแท็บนี้เสร็จ ต้องกด 'Apply & Save' เสมอ\n"
-                      "ค่าจะถูกบันทึกลงไฟล์ตั้งค่า และมีผลทันที"),
+            {"title": "Settings/Config — save",
+             "body": ("After editing this tab, always press 'Apply & Save'\nValues are written to the settings file and take effect immediately"),
              "widget": "config_save_btn", "on_show": cfg},
 
             # ================= TAB: Main =================
-            {"title": "3. เชื่อมต่อเลเซอร์ — ปุ่ม Connect",
-             "body": ("กลับแท็บ Main กด 'Connect' เชื่อมต่อตาม IP/Port ที่ตั้งไว้\n"
-                      "• สำเร็จ → สถานะเป็น 'Connected' (เขียว)\n"
-                      "• ต้องเชื่อมต่อก่อน FIRE/โปรแกรมจึงสั่งงานได้\n"
-                      "• Disconnect = ตัดการเชื่อมต่อ"),
+            {"title": "3. Connect the laser — Connect button",
+             "body": ("Back on the Main tab, press 'Connect' to connect using the configured IP/Port\n• Success → status becomes 'Connected' (green)\n• You must connect before FIRE/programs can run\n• Disconnect = drop the connection"),
              "widget": "connect_btn", "on_show": main},
 
-            {"title": "4. ควบคุมด้วยมือ (Manual Control)",
-             "body": ("• FIRE = เริ่มยิงทันที (บล็อกถ้าหลังคายังไม่เปิด)\n"
-                      "• STANDBY = พักการยิง\n"
-                      "• STOP = หยุดฉุกเฉิน หยุดยิง+หยุดบันทึก\n"
-                      "เหมาะกับทดสอบสั้น ๆ ก่อนตั้งโปรแกรม"),
+            {"title": "4. Manual Control",
+             "body": ("• FIRE = fire immediately (blocked if the roof is not open)\n• STANDBY = pause firing\n• STOP = emergency stop; stop firing + stop recording\nGood for a quick test before setting up a program"),
              "widget": "manual_frame", "on_show": main, "shape": R},
 
-            {"title": "5. QSDELAY (µs) — สาธิตกรอก 220",
-             "body": ("QSDELAY = ดีเลย์ Q-switch (ไมโครวินาที) มีผลต่อพลังงานพัลส์\n"
-                      "• ช่วงแนะนำ: 0 – 400\n"
-                      "• (สาธิต) กรอก 220 ให้ดู — พิมพ์เองแล้วกด 'Set' เพื่อส่งจริง\n"
-                      "• 'Value:' = ค่าที่อ่านกลับจากเครื่อง (ยืนยันตั้งติด)"),
+            {"title": "5. QSDELAY (µs) — demo: enter 220",
+             "body": ("QSDELAY = Q-switch delay (microseconds); affects pulse energy\n• Recommended range: 0 – 400\n• (Demo) 220 is filled in for show — type it yourself and press 'Set' to send for real\n• 'Value:' = value read back from the device (confirms it was set)"),
              "widget": "qs_entry", "on_show": show_qs},
 
-            {"title": "6. Frequency (Hz) — สาธิตกรอก 20",
-             "body": ("Frequency = ความถี่ยิงพัลส์ต่อวินาที\n"
-                      "• ช่วงแนะนำ: 1 – 22 Hz\n"
-                      "• (สาธิต) กรอก 20 ให้ดู — กด 'Set' เพื่อส่งจริง\n"
-                      "• ยิ่งสูงยิงถี่ขึ้น"),
+            {"title": "6. Frequency (Hz) — demo: enter 20",
+             "body": ("Frequency = pulses fired per second\n• Recommended range: 1 – 22 Hz\n• (Demo) 20 is filled in for show — press 'Set' to send for real\n• Higher = faster firing"),
              "widget": "df_entry", "on_show": show_fq},
 
-            {"title": "6.1 บันทึกค่าตั้งเลเซอร์",
-             "body": ("กด 'Save Settings' เพื่อจำค่า QSDELAY / Frequency\n"
-                      "เปิดโปรแกรมครั้งหน้าจะโหลดค่าเดิมกลับมาให้"),
+            {"title": "6.1 Save laser settings",
+             "body": ("Press 'Save Settings' to remember QSDELAY / Frequency\nThey are restored next time you open the app"),
              "widget": "save_settings_btn", "on_show": main},
 
-            {"title": "7. Temp Control — ป้องกันอุณหภูมิ",
-             "body": ("ติ๊ก 'Enable' เพื่อเปิดใช้ป้องกันเลเซอร์ร้อนเกิน\n"
-                      "• Max LTEMF (°C) = เพดานอุณหภูมิภายใน (เช่น 32-35)\n"
-                      "• Max DTEMF (°C) = เพดานอุณหภูมิไดโอด (เช่น 35-55)\n"
-                      "เกินเพดาน → สั่ง STANDBY อัตโนมัติทันที"),
+            {"title": "7. Temp Control — overheat protection",
+             "body": ("Tick 'Enable' to protect the laser from overheating\n• Max LTEMF (°C) = internal temperature ceiling (e.g. 32-35)\n• Max DTEMF (°C) = diode temperature ceiling (e.g. 35-55)\nOver the ceiling → auto STANDBY immediately"),
              "widget": "temp_frame", "on_show": main, "shape": R},
 
             # ---- จำลองอุณหภูมิสูงเกิน (แสดงผลอย่างเดียว ปลอดภัย) ----
-            {"title": "7.1 จำลองอุณหภูมิสูงเกิน — การแสดงผล",
-             "body": ("(สาธิต) นี่คือหน้าตาเมื่อ 'อุณหภูมิเกินเพดาน':\n"
-                      "• ค่า DTEMF ที่ Telemetry ขึ้นสีแดง เกินค่า Max\n"
-                      "• มี popup 'Overheat Warning' (พื้นแดง) เด้งขึ้น\n"
-                      "  บอกว่าค่าไหน trigger + ค่า Max เท่าไร\n"
-                      "*** จำลองการแสดงผลเท่านั้น ไม่ได้สั่งงานเลเซอร์จริง ***"),
+            {"title": "7.1 Simulate overheat — display",
+             "body": ("(Demo) This is what an 'over-temperature' looks like:\n• The DTEMF value in Telemetry turns red, above Max\n• An 'Overheat Warning' popup (red background) appears\n  showing which value triggered it + the Max\n*** Display simulation only — no real laser command is sent ***"),
              "widget": "tele_frame", "on_show": show_temp, "shape": R},
 
-            {"title": "7.2 จำลองอุณหภูมิสูงเกิน — ผลกระทบ",
-             "body": ("เมื่ออุณหภูมิเกินจริง (DTEMF หรือ LTEMF) ระบบทำทันที:\n"
-                      "1) สั่ง STANDBY ดับการยิงเลเซอร์ (กันเสียหาย)\n"
-                      "2) ปิดหลังคาอัตโนมัติหลัง 5 วินาที\n"
-                      "3) popup ค้างจนกว่าอุณหภูมิจะลดต่ำกว่า Max (มี hysteresis)\n\n"
-                      "CSV ยังบันทึกต่อ • เมื่ออุณหภูมิปกติ popup ปิดเอง"),
+            {"title": "7.2 Simulate overheat — effects",
+             "body": ("When the temperature truly exceeds the ceiling (DTEMF or LTEMF), the system immediately:\n1) Sends STANDBY to stop firing (prevents damage)\n2) Auto-closes the roof after 5 seconds\n3) Keeps the popup until the temperature drops below Max (with hysteresis)\n\nCSV keeps recording • the popup closes itself once the temperature is normal"),
              "widget": "temp_frame", "on_show": main, "shape": R},
 
-            {"title": "8. หลังคา (Sliding Roof)",
-             "body": ("ยิงได้เฉพาะเมื่อหลังคาเปิด (ON)\n"
-                      "• Open / Close = เปิด/ปิดด้วยมือ • ป้าย ON/OFF = สถานะ\n"
-                      "• สั่งปิดหลังคาจะดับเลเซอร์ก่อนเสมอ (interlock)\n"
-                      "• ฝนตก → ปิดหลังคา + หยุดโปรแกรมอัตโนมัติ"),
+            {"title": "8. Sliding Roof",
+             "body": ("Firing is allowed only when the roof is open (ON)\n• Open / Close = open/close manually • the ON/OFF label = status\n• Closing the roof always stops the laser first (interlock)\n• Rain → auto-close the roof + stop programs"),
              "widget": "roof_frame", "on_show": show_after_temp, "shape": R},
 
-            {"title": "8.1 เปิด/ปิดหลังคาอัตโนมัติ (ในแท็บ Settings)",
-             "body": ("ไปที่แท็บ Settings/Config → กรอบ Roof Settings\n"
-                      "ติ๊ก 'Enable auto open/close' ให้ระบบจัดการเอง:\n"
-                      "• เปิดก่อนถึงเวลายิง (Pre-open lead)\n"
-                      "• ปิดหลังพัก (Post-close delay)\n"
-                      "เหมาะกับรันโปรแกรมยาว"),
+            {"title": "8.1 Auto open/close the roof (on the Settings tab)",
+             "body": ("Go to Settings/Config → Roof Settings\nTick 'Enable auto open/close' to let the system handle it:\n• Open before fire time (Pre-open lead)\n• Close after rest (Post-close delay)\nGood for long program runs"),
              "widget": "roof_auto_cb", "on_show": cfg, "shape": R},
 
-            {"title": "9. โปรแกรมยิงอัตโนมัติ",
-             "body": ("ตั้งเวลายิงเป็นรอบ FIRE/REST อัตโนมัติ\n"
-                      "แต่ละโปรแกรมเป็นแท็บ (Program 1, 2, ...)\n"
-                      "ขั้นถัดไปจะสาธิตกรอกค่าตัวอย่างให้ดู"),
+            {"title": "9. Scheduled firing programs",
+             "body": ("Schedule firing as automatic FIRE/REST cycles\nEach program is a tab (Program 1, 2, ...)\nThe next steps demo sample values"),
              "widget": "programs_frame", "on_show": main, "shape": R},
 
-            {"title": "9.1 Mode — สาธิตเลือก everyday",
-             "body": ("Mode กำหนดวันทำงาน:\n"
-                      "• everyday=ทุกวัน • weekdays=จ-ศ\n"
-                      "• selectday=เฉพาะวันที่เลือก • once=วันเดียว\n"
-                      "(สาธิต) เลือก everyday ให้ดู"),
+            {"title": "9.1 Mode — demo: choose everyday",
+             "body": ("Mode sets which days it runs:\n• everyday=every day • weekdays=Mon-Fri\n• selectday=only selected dates • once=a single day\n(Demo) everyday is selected for show"),
              "widget": "mode_cb", "on_show": show_mode},
 
-            {"title": "9.2 Start/End — สาธิต 16:30–16:50",
-             "body": ("• Start (HH:MM) = เวลาเริ่ม\n"
-                      "• End (HH:MM) = เวลาสิ้นสุด\n"
-                      "(สาธิต) กรอก 16:30 → 16:50 ให้ดู (ข้ามเที่ยงคืนได้)"),
+            {"title": "9.2 Start/End — demo 16:30–16:50",
+             "body": ("• Start (HH:MM) = start time\n• End (HH:MM) = end time\n(Demo) 16:30 → 16:50 is filled in (crossing midnight is allowed)"),
              "widget": "start_entry", "on_show": show_time},
 
-            {"title": "9.3 Fire/Rest — สาธิต 1 / 1",
-             "body": ("รอบ = ยิง(Fire) สลับพัก(Rest) วนจนหมดเวลา\n"
-                      "• หน่วยนาที รูปแบบ M.SS: 1.30=1น 30วิ, 0.30=30วิ\n"
-                      "• (สาธิต) Fire=1, Rest=1 ให้ดู\n"
-                      "• Fire ต้อง>0 • Rest=0 ได้ (ยิงต่อเนื่อง)"),
+            {"title": "9.3 Fire/Rest — demo 1 / 1",
+             "body": ("A cycle = Fire then Rest, repeated until the end time\n• Minutes in M.SS format: 1.30=1 min 30 s, 0.30=30 s\n• (Demo) Fire=1, Rest=1 for show\n• Fire must be >0 • Rest=0 is allowed (continuous firing)"),
              "widget": "fire_entry", "on_show": show_fr},
 
-            {"title": "9.4 Calculate Cycles — สาธิตคำนวณ",
-             "body": ("(สาธิต) กดคำนวณจากค่าตัวอย่าง → ดูผล 'LOOP = N'\n"
-                      "ใช้ตรวจว่าช่วงเวลา/Fire/Rest ที่ตั้งจะยิงได้กี่รอบ ก่อนเริ่มจริง"),
+            {"title": "9.4 Calculate Cycles — demo calculation",
+             "body": ("(Demo) Calculate from the sample values → see 'LOOP = N'\nUse it to check how many cycles the window/Fire/Rest will produce before starting"),
              "widget": "calc_cycles_btn", "on_show": show_calc},
 
             {"title": "9.5 Preview Fire Times",
-             "body": ("กด 'Preview Fire Times' เพื่อดูเวลายิงจริงทุกรอบ (HH:MM:SS)\n"
-                      "ตรวจก่อนกด Start จริง (แสดงเป็นหน้าต่างรายการเวลา)"),
+             "body": ("Press 'Preview Fire Times' to see every actual fire time (HH:MM:SS)\nCheck it before pressing Start (shown as a list window)"),
              "widget": "preview_btn", "on_show": main},
 
             {"title": "9.6 Start Program",
-             "body": ("กด 'Start Program' เริ่มทำงานตามตาราง\n"
-                      "• สถานะขึ้น Firing/Resting + แถบความคืบหน้า\n"
-                      "• เปิด auto roof → หลังคาเปิด-ปิดให้เอง\n"
-                      "• ฝนตก → สั่ง STOP อัตโนมัติ"),
+             "body": ("Press 'Start Program' to run on schedule\n• Status shows Firing/Resting + a progress bar\n• With auto roof on → the roof opens/closes itself\n• Rain → auto STOP"),
              "widget": "start_program_btn", "on_show": main},
 
             {"title": "9.7 Stop Program",
-             "body": ("กด 'Stop Program' หยุดโปรแกรมนี้\n"
-                      "• STANDBY + หยุดบันทึก + ปิดหลังคา (ถ้า auto)\n"
-                      "• ใช้ Start/Stop แทน pause (ไม่มีปุ่ม pause แล้ว)"),
+             "body": ("Press 'Stop Program' to stop this program\n• STANDBY + stop recording + close the roof (if auto)\n• Use Start/Stop instead of pause (there is no pause button)"),
              "widget": "stop_program_btn", "on_show": main},
 
-            {"title": "9.8 Duplicate / เพิ่มหลายโปรแกรม",
-             "body": ("• Duplicate = คัดลอกโปรแกรมนี้เป็นแท็บใหม่\n"
-                      "• + Add Program = เพิ่มโปรแกรมใหม่\n"
-                      "• Start All / Stop All / Remove All = จัดการทุกโปรแกรมพร้อมกัน"),
+            {"title": "9.8 Duplicate / add more programs",
+             "body": ("• Duplicate = copy this program into a new tab\n• + Add Program = add a new program\n• Start All / Stop All / Remove All = manage every program at once"),
              "widget": "duplicate_btn", "on_show": main},
 
-            {"title": "10. เซ็นเซอร์ฝน (Rain Sensor)",
-             "body": ("แสดงสถานะฝน/ความเข้ม/ปริมาณสะสม เรียลไทม์\n"
-                      "พบฝน → อัตโนมัติ: 1) STOP ทุกโปรแกรม 2) ปิดหลังคา 3) STANDBY\n"
-                      "หลังฝนหยุดต้องกด Start เองอีกครั้ง"),
+            {"title": "10. Rain Sensor",
+             "body": ("Shows rain status/intensity/accumulation in real time\nRain detected → automatically: 1) STOP all programs 2) close the roof 3) STANDBY\nAfter the rain stops you must press Start again yourself"),
              "widget": "rain_frame", "on_show": main, "shape": R},
 
-            {"title": "11. เซ็นเซอร์อุณหภูมิ/ความชื้น",
-             "body": ("แสดง Temp / RH / Dew point ทั้ง Indoor และ Outdoor\n"
-                      "ดูสภาพแวดล้อมประกอบการยิง (ความชื้น/จุดน้ำค้าง)"),
+            {"title": "11. Temperature/Humidity sensor",
+             "body": ("Shows Temp / RH / Dew point for both Indoor and Outdoor\nUse it to judge the environment for firing (humidity/dew point)"),
              "widget": "sensor_frame", "on_show": main, "shape": R},
 
             # ---- จำลองฝนตก (แสดงผลอย่างเดียว ปลอดภัย) ----
-            {"title": "11.1 จำลองฝนตก — การแสดงผล",
-             "body": ("(สาธิต) นี่คือหน้าตาเมื่อ 'ฝนตก':\n"
-                      "• สถานะ Rain Sensor เปลี่ยนเป็น 🌧 RAINING (สีน้ำเงิน)\n"
-                      "  พร้อมค่า Intensity (mm/hr) และ Total (mm)\n"
-                      "• มี popup 'Rain Detected!' เด้งขึ้นบอกรายละเอียด + เวลา\n"
-                      "*** เป็นการจำลองการแสดงผลเท่านั้น ไม่ได้สั่งงานเลเซอร์/หลังคาจริง ***"),
+            {"title": "11.1 Simulate rain — display",
+             "body": ("(Demo) This is what 'rain' looks like:\n• Rain Sensor status changes to 🌧 RAINING (blue)\n  with Intensity (mm/hr) and Total (mm)\n• A 'Rain Detected!' popup appears with details + time\n*** Display simulation only — no real laser/roof command is sent ***"),
              "widget": "rain_frame", "on_show": show_rain, "shape": R},
 
-            {"title": "11.2 จำลองฝนตก — ผลกระทบอัตโนมัติ",
-             "body": ("เมื่อฝนตกจริง ระบบทำ 3 อย่างทันทีเพื่อความปลอดภัย:\n"
-                      "1) STOP โปรแกรมตั้งเวลาทุกตัวที่กำลังรัน\n"
-                      "2) ปิดหลังคา (ดับเลเซอร์ก่อนเสมอ — interlock)\n"
-                      "3) สั่ง STANDBY ดับการยิงเลเซอร์\n\n"
-                      "หลังฝนหยุด สถานะจะกลับเป็น No Rain แต่โปรแกรมจะไม่เริ่มเอง\n"
-                      "→ ผู้ใช้ต้องกด 'Start Program' เองอีกครั้ง"),
+            {"title": "11.2 Simulate rain — automatic effects",
+             "body": ("When it truly rains, the system does 3 things immediately for safety:\n1) STOP every running scheduled program\n2) Close the roof (always stops the laser first — interlock)\n3) Send STANDBY to stop firing\n\nAfter the rain stops the status returns to No Rain, but programs do not restart by themselves\n→ you must press 'Start Program' again"),
              "widget": "roof_frame", "on_show": main, "shape": R},
 
-            {"title": "12. Telemetry & บันทึก CSV",
-             "body": ("แสดง DTEMF/LTEMF (อุณหภูมิเลเซอร์) แบบสด\n"
-                      "• ติ๊ก 'Save CSV' บันทึกลงไฟล์ • ช่อง File: ตั้งชื่อ/ที่อยู่\n"
-                      "ไฟล์เก็บใน logs/data"),
+            {"title": "12. Telemetry & CSV logging",
+             "body": ("Shows DTEMF/LTEMF (laser temperatures) live\n• Tick 'Save CSV' to log to a file • the File: box sets the name/path\nFiles are kept in logs/data"),
              "widget": "save_csv_chk", "on_show": show_after_rain},
 
-            {"title": "13. กราฟเรียลไทม์",
-             "body": ("• กราฟบน = FIRE(1)/REST(0) เห็นจังหวะยิง-พัก\n"
-                      "• กราฟล่าง = แนวโน้ม DTEMF/LTEMF\n"
-                      "เฝ้าดูว่าทำงานตามรอบและอุณหภูมิปกติไหม"),
+            {"title": "13. Real-time charts",
+             "body": ("• Top chart = FIRE(1)/REST(0), showing the fire/rest rhythm\n• Bottom chart = DTEMF/LTEMF trend\nWatch that it follows the cycle and the temperature stays normal"),
              "widget": "charts_frame", "on_show": main, "shape": R},
 
             {"title": "14. Logs & Terminal",
-             "body": ("3 แท็บย่อย: All except Schedule (log รวม), Schedule Logs\n"
-                      "(log ตัวตั้งเวลา), Terminal (พิมพ์คำสั่งตรงถึงเลเซอร์ $STATUS ...)\n"
-                      "ใช้ตรวจสอบ/แก้ปัญหา"),
+             "body": ("3 sub-tabs: All except Schedule (combined log), Schedule Logs\n(scheduler log), Terminal (type commands straight to the laser $STATUS ...)\nUse them to monitor/troubleshoot"),
              "widget": "logs_frame", "on_show": main, "shape": R},
 
-            {"title": "15. อัปเดตโปรแกรม",
-             "body": ("เช็คเวอร์ชันใหม่อัตโนมัติตอนเปิด และกด 'Check for updates' เองได้\n"
-                      "มีใหม่ → ยืนยัน → ดาวน์โหลด → ปิดแล้วเปิดใหม่เอง (ไม่ต้องติดตั้งใหม่)"),
+            {"title": "15. App updates",
+             "body": ("Checks for new versions automatically on launch, or press 'Check for updates'\nIf available → confirm → download → it closes and reopens itself (no reinstall needed)"),
              "widget": "check_update_btn", "on_show": main},
 
-            {"title": "จบคู่มือ — สรุปลำดับใช้งานจริง",
-             "body": ("1) Connection/Settings → ตั้งค่า + Apply & Save\n"
-                      "2) Connect\n"
-                      "3) QSDELAY/Frequency + เปิด Temp Control\n"
-                      "4) ตั้งโปรแกรม (Mode/เวลา/Fire-Rest) → Preview → Start\n"
-                      "   หรือยิงมือ FIRE (เปิดหลังคาก่อน)\n"
-                      "5) เฝ้าดูกราฟ/Logs • ฝนตกระบบหยุดให้เอง\n\n"
-                      "ค่าตัวอย่างที่สาธิตจะถูกคืนค่าเดิมเมื่อปิดคู่มือนี้\n"
-                      "เปิดซ้ำได้จากปุ่ม 'Tutorial' เสมอ"),
+            {"title": "End of guide — the real usage order",
+             "body": ("1) Connection/Settings → configure + Apply & Save\n2) Connect\n3) QSDELAY/Frequency + enable Temp Control\n4) Set a program (Mode/time/Fire-Rest) → Preview → Start\n   or fire manually with FIRE (open the roof first)\n5) Watch the charts/Logs • rain stops everything for you\n\nThe demo sample values are restored when this guide closes\nYou can reopen it anytime from the 'Tutorial' button"),
              "widget": "tutorial_btn", "on_show": main},
         ]
         self._tutorial = TutorialOverlay(self, steps, self._ui_refs,
@@ -3534,34 +3418,34 @@ class App(tk.Tk):
         try:
             n = int(float(str(v["times"].get()).strip()))
         except Exception:
-            if lbl: lbl.config(text="Times/day ต้องเป็นตัวเลข", foreground="#b00")
-            return False, "Times/day ต้องเป็นตัวเลข"
+            if lbl: lbl.config(text="Times/day must be a number", foreground="#b00")
+            return False, "Times/day must be a number"
         if n <= 0:
-            if lbl: lbl.config(text="Times/day ต้อง > 0", foreground="#b00")
-            return False, "Times/day ต้องมากกว่า 0"
+            if lbl: lbl.config(text="Times/day must be > 0", foreground="#b00")
+            return False, "Times/day must be greater than 0"
         try:
             fire_min = self._parse_minutes_text(v["fire_ms"].get())
         except Exception as e:
-            if lbl: lbl.config(text=f"Fire ไม่ถูกต้อง: {e}", foreground="#b00")
-            return False, f"Fire ไม่ถูกต้อง: {e}"
+            if lbl: lbl.config(text=f"Invalid Fire: {e}", foreground="#b00")
+            return False, f"Invalid Fire: {e}"
 
-        cycle_min = 1440.0 / n            # 24 ชม. = 1440 นาที หารจำนวนครั้ง
+        cycle_min = 1440.0 / n            # 24 ชม. = 1440 min หารจำนวนครั้ง
         rest_min = cycle_min - fire_min
         if fire_min <= 0:
-            if lbl: lbl.config(text="Fire ต้อง > 0", foreground="#b00")
-            return False, "Fire ต้องมากกว่า 0"
+            if lbl: lbl.config(text="Fire must be > 0", foreground="#b00")
+            return False, "Fire must be greater than 0"
         if rest_min < 0:
             if lbl:
-                lbl.config(text=f"Fire ยาวเกิน — รอบละ {cycle_min:.2f} นาที",
+                lbl.config(text=f"Fire too long — {cycle_min:.2f} min",
                            foreground="#b00")
-            return False, (f"Fire ({fire_min:.2f} นาที) ยาวเกินรอบ "
-                           f"({cycle_min:.2f} นาที) สำหรับ {n} ครั้ง/วัน")
+            return False, (f"Fire ({fire_min:.2f} min) is longer than the cycle "
+                           f"({cycle_min:.2f} min) for {n} times/day")
 
         rest_ms = int(round(rest_min * 60000))
         v["rest_ms"].set(self._ms_to_minutes_text(rest_ms))
         if lbl:
             lbl.config(
-                text=(f"→ รอบละ {cycle_min:.2f} นาที  (Fire {fire_min:g} + "
+                text=(f"→ cycle {cycle_min:.2f} min  (Fire {fire_min:g} + "
                       f"Rest {self._ms_to_minutes_text(rest_ms)})"),
                 foreground="gray")
         return True, ""
@@ -4092,7 +3976,7 @@ class App(tk.Tk):
             now_ts = time.monotonic()
             if now_ts - self._datalog_fail_ts >= 60.0:
                 self._datalog_fail_ts = now_ts
-                self.log(f"Data logger tick error: {e} (suppress ถัดไป 60s)")
+                self.log(f"Data logger tick error: {e} (suppress next 60s)")
         finally:
             if not self._datalog_stop.is_set():
                 interval_ms = max(5, int(getattr(self, "datalog_interval", 300))) * 1000
@@ -4113,7 +3997,7 @@ class App(tk.Tk):
             now_ts = time.monotonic()
             if now_ts - self._datalog_fail_ts >= 60.0:
                 self._datalog_fail_ts = now_ts
-                self.log(f"Data logger error: {e} (suppress ถัดไป 60s)")
+                self.log(f"Data logger error: {e} (suppress next 60s)")
             self._datalog_close()                 # ปล่อย handle ให้ลองเปิดใหม่รอบหน้า
 
     def _start_datalog(self):
@@ -4200,7 +4084,7 @@ class App(tk.Tk):
             self.tele_stop.clear()
 
         def worker():
-            self.log("เริ่มเก็บ Telemetry (CSV)")
+            self.log("Started Telemetry recording (CSV)")
 
             while not self.tele_stop.is_set():
                 if time.monotonic() < self.tele_pause_until:
@@ -4332,16 +4216,16 @@ class App(tk.Tk):
                             with open(manual_path, "a", newline="", encoding="utf-8") as mf:
                                 csv.writer(mf).writerow(row)
                         except Exception as e2:
-                            self.log(f"บันทึก CSV manual parallel ล้มเหลว: {e2}")
+                            self.log(f"Manual parallel CSV write failed: {e2}")
 
                 except Exception as e:
-                    self.log(f"บันทึก CSV ล้มเหลว: {e}")
+                    self.log(f"CSV write failed: {e}")
 
                 for _ in range(int(self.tele_interval_sec * 10)):
                     if self.tele_stop.is_set():
                         break
                     time.sleep(0.1)
-            self.log("หยุดเก็บ Telemetry (CSV)")
+            self.log("Stopped Telemetry recording (CSV)")
 
         self.tele_thread = threading.Thread(target=worker, daemon=True)
         self.tele_thread.start()
@@ -4472,7 +4356,7 @@ class App(tk.Tk):
                                       "DTEMF", dval, max_dtemf, lval, max_ltemf)
                     elif dval <= (max_dtemf - hysteresis) and self._dtemf_alarm_active:
                         self._dtemf_alarm_active = False
-                        self.log(f"✅ DTEMF กลับสู่ปกติ: {dval:.2f} °C")
+                        self.log(f"✅ DTEMF back to normal: {dval:.2f} °C")
                         if not self._temp_alarm_active:
                             self._ui_call(self._hide_overheat_popup)
 
@@ -4490,7 +4374,7 @@ class App(tk.Tk):
                                       "LTEMF", lval, max_ltemf, dval, max_dtemf)
                     elif lval <= (max_ltemf - hysteresis) and self._temp_alarm_active:
                         self._temp_alarm_active = False
-                        self.log(f"✅ LTEMF กลับสู่ปกติ: {lval:.2f} °C")
+                        self.log(f"✅ LTEMF back to normal: {lval:.2f} °C")
                         if not self._dtemf_alarm_active:
                             self._ui_call(self._hide_overheat_popup)
 
@@ -4880,7 +4764,7 @@ class App(tk.Tk):
 
         if mode == "24h":
             # ยิงต่อเนื่องทั้งวันทุกวัน — หน้าต่าง = เที่ยงคืนวันนี้ → เที่ยงคืนวันถัดไป
-            # (วันต่อวันต่อเนื่องกันพอดี เพราะรอบหารเต็ม 1440 นาที)
+            # (วันต่อวันต่อเนื่องกันพอดี เพราะรอบหารเต็ม 1440 min)
             today = now_dt.date()
             s = self._parse_hhmm_into(today, "00:00")
             e = s + timedelta(days=1)
@@ -5060,7 +4944,7 @@ class App(tk.Tk):
             return
 
         if not v["enabled"].get():
-            self._sched_log(idx, "โปรแกรมถูกปิดการทำงาน (Enable=OFF)")
+            self._sched_log(idx, "Program is disabled (Enable=OFF)")
             return
 
         # เคลียร์ของเก่า
@@ -5102,7 +4986,7 @@ class App(tk.Tk):
             self._sched_log(idx, "MANAGER START")
             while not v["manager_stop"].is_set():
                 if idx < 0 or idx >= len(self.programs):
-                    self._sched_log(idx, "โปรแกรมถูกลบออกไปแล้ว (manager exit)")
+                    self._sched_log(idx, "Program was removed (manager exit)")
                     break
 
                 now_dt = datetime.now(TZ)
@@ -5110,7 +4994,7 @@ class App(tk.Tk):
                 s_dt, e_dt = self.compute_next_occurrence(idx, now_dt)
 
                 if not s_dt:
-                    self._sched_log(idx, "ไม่มีรอบถัดไป (จบโปรแกรมตามเงื่อนไข)")
+                    self._sched_log(idx, "No next occurrence (program finished by its rules)")
                     break
 
                 # If already inside the window, align to the next fire time instead of starting immediately
@@ -5123,7 +5007,7 @@ class App(tk.Tk):
                             self._sched_log(idx, "No remaining fire time in the current window")
                             break
                         # โหมดวนรอบ → ข้ามช่วงท้ายที่ไม่มีรอบยิง ไปหน้าต่างถัดไป
-                        self._sched_log(idx, "ไม่มีรอบยิงเหลือในหน้าต่างนี้ → ข้ามไปหน้าต่างถัดไป")
+                        self._sched_log(idx, "No fire cycles left in this window → skipping to the next window")
                         s_dt, e_dt = self.compute_next_occurrence(idx, e_dt)
                         if not s_dt:
                             break
@@ -5142,22 +5026,22 @@ class App(tk.Tk):
                         s_dt, e_dt, fire_ms, rest_ms, datetime.now(TZ))
                     if s_adj is None:
                         self._sched_log(
-                            idx, "เริ่มกลางรอบ: ไม่เหลือรอบที่เปิดหลังคาทันในหน้าต่างนี้ → ไปหน้าต่างถัดไป")
+                            idx, "Started mid-window: no cycle leaves time to pre-open the roof in this window → next window")
                         s_dt, e_dt = self.compute_next_occurrence(idx, e_dt)
                         if not s_dt:
-                            self._sched_log(idx, "ไม่มีรอบถัดไป (จบโปรแกรม)")
+                            self._sched_log(idx, "No next occurrence (program finished)")
                             break
                     elif s_adj != s_dt:
                         self._sched_log(
                             idx,
-                            f"เริ่มกลางรอบ fire: เลื่อนไปยิงรอบถัดไป "
-                            f"{s_adj.strftime('%H:%M:%S')} เพื่อให้เปิดหลังคาทัน")
+                            f"Started mid fire-slot: shifting to the next fire cycle "
+                            f"{s_adj.strftime('%H:%M:%S')} so the roof can pre-open in time")
                         s_dt = s_adj
 
                 try:
                     self._schedule_prefire_api(idx, s_dt)
                 except Exception as e:
-                    self._sched_log(idx, f"ตั้ง auto-open ไม่สำเร็จ: {e}")
+                    self._sched_log(idx, f"Failed to schedule auto-open: {e}")
 
 
                 total = FireRestScheduler.count_fire_cycles(
@@ -5310,7 +5194,7 @@ class App(tk.Tk):
                         if next_fire_start < e_dt:  
                             self._schedule_prefire_api(idx, next_fire_start)
                     except Exception as e:
-                        self._sched_log(idx, f"ตั้ง auto-open รอบถัดไปไม่สำเร็จ: {e}")
+                        self._sched_log(idx, f"Failed to schedule next auto-open: {e}")
 
 
                 fr = FireRestScheduler(
@@ -5361,7 +5245,7 @@ class App(tk.Tk):
                     try:
                         next_s, _ = self.compute_next_occurrence(idx, datetime.now(TZ))
                     except Exception as e:
-                        self._sched_log(idx, f"คำนวณรอบถัดไปไม่สำเร็จ: {e}")
+                        self._sched_log(idx, f"Failed to compute next occurrence: {e}")
                         next_s = None
 
                     if next_s:
@@ -5597,12 +5481,12 @@ class App(tk.Tk):
                     data["programs"].append(item)
                 except Exception as e:
                     # โปรแกรมที่มีค่าผิด (เช่น Fire/Rest ว่าง) — ข้าม ไม่ให้ save ทั้งก้อนล้ม
-                    self.log(f"ข้ามบันทึกโปรแกรมที่ค่าผิด: {e}")
+                    self.log(f"Skipped saving a program with invalid values: {e}")
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            self.log("บันทึกการตั้งค่าแล้ว")
+            self.log("Settings saved")
         except Exception as e:
-            self.log(f"บันทึกการตั้งค่าล้มเหลว: {e}")
+            self.log(f"Failed to save settings: {e}")
 
     def _load_config_into_ui(self):
         global LOG_DIR
@@ -5615,7 +5499,7 @@ class App(tk.Tk):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            self.log(f"อ่านการตั้งค่าล้มเหลว: {e}")
+            self.log(f"Failed to read settings: {e}")
             return
 
         try:
@@ -5810,11 +5694,11 @@ class App(tk.Tk):
                     try:
                         self.add_program(p)
                     except Exception as e:
-                        self.log(f"โหลดโปรแกรมล้มเหลว: {e}")
+                        self.log(f"Failed to load programs: {e}")
                 self._update_program_tab_titles()
 
         except Exception as e:
-            self.log(f"โหลดค่า config เข้า UI ล้มเหลว: {e}")
+            self.log(f"Failed to load config into UI: {e}")
 
     # ---- Sliding Roof helpers (moved HTTP to api_clients.py) ----
     def _roof_set_status(self, text: str):
@@ -5835,7 +5719,7 @@ class App(tk.Tk):
                 if now_ts - last >= 30.0:
                     self._last_roof_api_err_ts = now_ts
                     if hasattr(self, "log"):
-                        self.log(f"Roof API error: {res.error} (suppress ถัดไป 30s)")
+                        self.log(f"Roof API error: {res.error} (suppress next 30s)")
         self.after(0, apply)
 
     # ---- Sliding Roof public actions ----
@@ -5894,7 +5778,7 @@ class App(tk.Tk):
         # ทำใน thread เพื่อไม่ให้ UI ค้าง (send_cmd เป็น blocking + มี timeout)
         def _seq():
             if not self._send_standby_sync():
-                self.log(f"⚠ STANDBY ไม่ยืนยันผล ({reason}) → ยังสั่งปิดหลังคาต่อเพื่อความปลอดภัย")
+                self.log(f"⚠ STANDBY not confirmed ({reason}) → still closing the roof for safety")
             self.roof_client.post_close(on_result=self._on_roof_result)
 
         threading.Thread(target=_seq, daemon=True, name="RoofCloseSeq").start()
@@ -5962,7 +5846,7 @@ class App(tk.Tk):
         # ปิดหลังคาอัตโนมัติหลัง 5 วินาที ถ้าเปิดโหมดควบคุมหลังคาอัตโนมัติไว้
         # """
         if not self._is_roof_auto_close_enabled():
-            self.log(f"Auto roof OFF → ไม่ปิดหลังคาอัตโนมัติ ({reason})")
+            self.log(f"Auto roof OFF → not auto-closing the roof ({reason})")
             return
 
         try:
@@ -5986,7 +5870,7 @@ class App(tk.Tk):
                 except Exception:
                     pass
         else:
-            self.log(f"Roof already closed ({state}) → ไม่ต้องสั่งปิด ({reason})")
+            self.log(f"Roof already closed ({state}) → no need to close ({reason})")
 
     def _cancel_delayed_roof_close(self, idx: int | None = None) -> None:
         """
@@ -6041,7 +5925,7 @@ class App(tk.Tk):
         if not self.laser:              # ยังไม่ connect → ไม่ตั้ง
             return
         if not self._is_program_active(idx):
-            self._sched_log(idx, "prefire ไม่ถูกตั้ง: โปรแกรมหยุดแล้ว")
+            self._sched_log(idx, "prefire not scheduled: program already stopped")
             return
 
         now = datetime.now(TZ)
@@ -6050,8 +5934,8 @@ class App(tk.Tk):
         if lead < -1.0:
             self._sched_log(
                 idx,
-                f"prefire ไม่ถูกตั้ง: เวลายิง {start_dt.strftime('%H:%M:%S')} ผ่านไปแล้ว "
-                f"({-lead:.0f}s ที่แล้ว)"
+                f"prefire not scheduled: fire time {start_dt.strftime('%H:%M:%S')} already passed "
+                f"({-lead:.0f}s ago)"
             )
             return
         delay = max(0.0, lead)
@@ -6059,10 +5943,10 @@ class App(tk.Tk):
         def _go():
             # ตรวจสถานะซ้ำ ณ เวลาที่ timer ทำงานจริง (ไม่ใช่แค่ตอนตั้ง)
             if not self._is_program_active(idx):
-                self._sched_log(idx, "⛔ prefire ยกเลิก: โปรแกรมหยุดแล้ว → ไม่เปิดหลังคา")
+                self._sched_log(idx, "⛔ prefire cancelled: program stopped → not opening the roof")
                 return
             if self.is_raining_now():
-                self._sched_log(idx, "⛔ prefire ยกเลิก: ฝนตก → ไม่เปิดหลังคา")
+                self._sched_log(idx, "⛔ prefire cancelled: raining → not opening the roof")
                 return
 
             # Safety off → ไม่บังคับ/ไม่รอ roof (เปิดให้ครั้งเดียวพอ)
@@ -6081,31 +5965,31 @@ class App(tk.Tk):
             for attempt in range(1, max_attempts + 1):
                 # เลิกถ้าโปรแกรมหยุด/ฝนตกระหว่าง retry
                 if not self._is_program_active(idx):
-                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: โปรแกรมหยุดแล้ว")
+                    self._sched_log(idx, "⛔ prefire cancelled during retry: program stopped")
                     return
                 if self.is_raining_now():
-                    self._sched_log(idx, "⛔ prefire ยกเลิกระหว่าง retry: ฝนตก")
+                    self._sched_log(idx, "⛔ prefire cancelled during retry: raining")
                     return
                 if self.roof_auto_sched_var.get():
                     self._external_on()        # POST เปิดหลังคา (ลองเปิดซ้ำได้ — idempotent)
                 if self._wait_roof_on(timeout=per_wait, interval=0.5):
                     opened = True
                     if attempt > 1:
-                        self._sched_log(idx, f"✅ prefire: หลังคาเปิดสำเร็จ (retry ครั้งที่ {attempt})")
+                        self._sched_log(idx, f"✅ prefire: roof opened successfully (retry {attempt})")
                     break
                 self._sched_log(
                     idx,
-                    f"prefire: หลังคายังไม่เปิดใน {per_wait:.0f}s "
-                    f"(ครั้งที่ {attempt}/{max_attempts}) → ลองเปิดใหม่")
+                    f"prefire: roof not open within {per_wait:.0f}s "
+                    f"(attempt {attempt}/{max_attempts}) → retrying open")
 
             if not opened:
                 # ❗ โปรแกรมอาจถูก Stop/ฝนตก ระหว่างรอ _wait_roof_on รอบสุดท้าย
                 # ถ้าไม่ active แล้ว ห้ามเด้ง popup (กันการแจ้งเตือนค้างหลังหยุดโปรแกรม)
                 if not self._is_program_active(idx):
-                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ แต่โปรแกรมหยุดแล้ว → ไม่เตือน")
+                    self._sched_log(idx, "prefire: auto-open failed but program stopped → no warning")
                     return
                 if self.is_raining_now():
-                    self._sched_log(idx, "prefire: auto-open ไม่สำเร็จ ขณะฝนตก (หลังคาปิดโดยตั้งใจ) → ไม่เตือน")
+                    self._sched_log(idx, "prefire: auto-open failed while raining (roof intentionally closed) → no warning")
                     return
                 # ครบ retry แล้วยังไม่เปิด → เตือน (non-blocking) + ปล่อยให้ guard บล็อกการยิง
                 try:
@@ -6115,7 +5999,7 @@ class App(tk.Tk):
                         "Firing is blocked until the roof is ON."))
                 except Exception:
                     pass
-                self.log("❌ auto-open ล้มเหลวหลัง retry — หลังคาไม่เปิดตามกำหนด")
+                self.log("❌ auto-open failed after retries — roof did not open in time")
                 return
 
         t = threading.Timer(delay, _go)
@@ -6131,14 +6015,14 @@ class App(tk.Tk):
         if not self.roof_auto_sched_var.get():
             return
         if not self._is_program_active(idx):
-            self._sched_log(idx, "postrest ไม่ถูกตั้ง: โปรแกรมหยุดแล้ว")
+            self._sched_log(idx, "postrest not scheduled: program already stopped")
             return
 
         def _go():
             # ตรวจซ้ำ ณ เวลาที่ timer ทำงานจริง — postrest ปิดหลังคาระหว่างรอบพัก
             # ถ้าโปรแกรมถูกสั่งหยุดไปแล้ว stop_program จัดการปิดหลังคาเอง จึงไม่ต้องปิดซ้ำ
             if not self._is_program_active(idx):
-                self._sched_log(idx, "⛔ postrest ยกเลิก: โปรแกรมหยุดแล้ว → ไม่ปิดหลังคา")
+                self._sched_log(idx, "⛔ postrest cancelled: program stopped → not closing the roof")
                 return
             if self.roof_auto_sched_var.get():
                 self._external_off()
@@ -6160,7 +6044,7 @@ class App(tk.Tk):
             self.save_config()
         except Exception as e:
             try:
-                self.log(f"auto-save ตอนปิดล้มเหลว: {e}")
+                self.log(f"Auto-save on close failed: {e}")
             except Exception:
                 pass
         try:
@@ -7017,7 +6901,7 @@ class App(tk.Tk):
             # ขณะฝนตก หลังคาถูกปิดโดยตั้งใจอยู่แล้ว → ไม่ต้องเด้ง popup รบกวน
             # (โปรแกรมกำลังถูกสั่งหยุดจาก _on_rain_started อยู่แล้ว)
             if self.is_raining_now():
-                self.log(f"Fire blocked: Roof {state} ขณะฝนตก (popup suppressed)")
+                self.log(f"Fire blocked: Roof {state} while raining (popup suppressed)")
                 return False
 
             # เตือนผ่าน main thread — ใช้ popup non-blocking (ไม่บล็อก event loop)
@@ -7045,7 +6929,7 @@ class App(tk.Tk):
                     0,
                     lambda err=str(e): messagebox.showerror(
                         "Fire Error",
-                        f"สั่งยิงไม่สำเร็จ:\n{err}"
+                        f"Fire command failed:\n{err}"
                     )
                 )
             except Exception:
@@ -7090,7 +6974,7 @@ class App(tk.Tk):
                     self._roof_na_since = None
                     state = "OFF"   # บังคับให้เข้าเส้นทางหยุดเลเซอร์ด้านล่าง
                     self.log(
-                        f"⚠ อ่านสถานะหลังคาไม่ได้ (N/A) เกิน {grace:.0f}s ขณะยิง → หยุดเลเซอร์เพื่อความปลอดภัย"
+                        f"⚠ Roof status unreadable (N/A) for over {grace:.0f}s during firing → stopping the laser for safety"
                     )
             elif state != "N/A":
                 self._roof_na_since = None
@@ -7105,7 +6989,7 @@ class App(tk.Tk):
                     self.after(0, lambda: self._append_status_point(0))
                     self._send("$STANDBY")
 
-                    self.log("⚠ Roof ปิดขณะยิง → สั่งหยุดเลเซอร์ทันที")
+                    self.log("⚠ Roof closed during firing → stopping the laser immediately")
                     self.after(
                         0,
                         lambda: self._warn_roof(
@@ -7148,7 +7032,7 @@ class App(tk.Tk):
         """
         if not self._is_safety_fire_enabled():
             return
-        # cooldown กันเด้งถี่ (เช่น ยิงถูกบล็อกทุก 30 นาที — แต่กันเผื่อ burst)
+        # cooldown กันเด้งถี่ (เช่น ยิงถูกบล็อกทุก 30 min — แต่กันเผื่อ burst)
         # แต่ safety alert (force=True) ต้องแสดงเสมอ ไม่ถูก cooldown ของ popup อื่นกลืน
         now_ts = time.monotonic()
         if not force:

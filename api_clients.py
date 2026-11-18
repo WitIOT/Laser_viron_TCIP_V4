@@ -107,7 +107,7 @@ class SlidingRoofClient:
             except Exception as e:
                 res = RoofResult(ok=False, state="UNKNOWN", raw_text="", error=str(e))
                 if self._log and self._should_log_error():
-                    self._log(f"Roof POST failed: {e} (จะ suppress log ถัดไป {self._err_cooldown:.0f}s)")
+                    self._log(f"Roof POST failed: {e} (suppressing next log for {self._err_cooldown:.0f}s)")
             if on_result:
                 on_result(res)
 
@@ -125,7 +125,7 @@ class SlidingRoofClient:
             except Exception as e:
                 res = RoofResult(ok=False, state="UNKNOWN", raw_text="", error=str(e))
                 if self._log and self._should_log_error():
-                    self._log(f"Roof GET failed: {e} (จะ suppress log ถัดไป {self._err_cooldown:.0f}s)")
+                    self._log(f"Roof GET failed: {e} (suppressing next log for {self._err_cooldown:.0f}s)")
             if on_result:
                 on_result(res)
 
@@ -179,7 +179,7 @@ class LimitStatusClient:
             return "N/A"
         except Exception as e:
             if self._log and self._should_log_error():
-                self._log(f"Limit GET failed: {e} (suppress ถัดไป {self._err_cooldown:.0f}s)")
+                self._log(f"Limit GET failed: {e} (suppress next {self._err_cooldown:.0f}s)")
             return "N/A"
 
     def fetch_state_async(

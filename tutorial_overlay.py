@@ -144,12 +144,12 @@ class TutorialOverlay:
             pass
 
         n = len(self.steps)
-        self.step_var.set(f"ขั้นที่ {self.idx + 1} / {n}")
+        self.step_var.set(f"Step {self.idx + 1} / {n}")
         self.title_var.set(step.get("title", ""))
         self.body_var.set(step.get("body", ""))
 
         self.btn_back.config(state=("disabled" if self.idx == 0 else "normal"))
-        self.btn_next.config(text=("เสร็จสิ้น ✓" if self.idx == n - 1 else "Next ▶"))
+        self.btn_next.config(text=("Finish ✓" if self.idx == n - 1 else "Next ▶"))
 
         w = self._get_widget(step.get("widget"))
         self._show_circle(w, step.get("shape", "oval"))
